@@ -2,6 +2,7 @@ import numpy as np
 import math
 from scipy import stats
 import csv
+import pandas as pd
 
 class GeneradorMultiplicadorConstante:
     def __init__(self, semilla_inicial, multiplicador):
@@ -9,7 +10,10 @@ class GeneradorMultiplicadorConstante:
         self.semilla = semilla_inicial
         self.multiplicador = multiplicador
     
-    def generar_numero(self):
+    def generar_numero_con_detalle(self, indice):
+        # Guardamos la semilla actual (Xi)
+        semilla_anterior = self.semilla
+        
         # Y = X * a
         Y = self.semilla * self.multiplicador
         
@@ -19,10 +23,34 @@ class GeneradorMultiplicadorConstante:
         # Extraer los 4 dígitos centrales (índices 2, 3, 4, 5)
         self.semilla = int(Y_str[2:6])
         
-        # Si la semilla llega a 0, se genera un problema porque quedará estancado en 0.
-        # En la práctica, con 10,000 números puede haber degeneración.
-        # Dejamos la implementación fiel al método matemático clásico.
+        ri = self.semilla / 10000.0
         
+        detalle = {
+            "Indice": indice,
+            "Semilla (Xi)": semilla_anterior,
+            "Multiplicador (a)": self.multiplicador,
+            "Producto (Xi * a)": Y,
+            "Producto Relleno": Y_str,
+            "Centro (Xi+1)": self.semilla,
+            "Numero Pseudoaleatorio (Ri)": ri
+        }
+        
+        return ri, detalle
+    
+    def generar_secuencia_completa(self, n):
+        numeros = []
+        detalles = []
+        for i in range(n):
+            ri, det = self.generar_numero_con_detalle(i + 1)
+            numeros.append(ri)
+            detalles.append(det)
+        return numeros, detalles
+    
+    def generar_numero(self):
+        # Y = X * a
+        Y = self.semilla * self.multiplicador
+        Y_str = str(Y).zfill(8)
+        self.semilla = int(Y_str[2:6])
         return self.semilla / 10000.0
     
     def generar_secuencia(self, n):
@@ -105,51 +133,114 @@ def prueba_corridas(numeros, alpha=0.05):
     aprobada = abs(z) <= z_critico
     return aprobada, z, z_critico
 
-def generar_y_evaluar(semilla, multiplicador, n_numeros, nombre_archivo):
-    print(f"\n--- Generando {n_numeros} números para {nombre_archivo} ---")
+def generar_y_evaluar(semilla, multiplicador, n_numeros, nombre_archivo_csv, nombre_archivo_excel):
+    print(f"\n--- Generando {n_numeros} números para {nombre_archivo_csv} y {nombre_archivo_excel} ---")
     print(f"Semilla: {semilla}, Multiplicador: {multiplicador}")
     
     generador = GeneradorMultiplicadorConstante(semilla, multiplicador)
-    numeros = generador.generar_secuencia(n_numeros)
+    numeros, detalles = generador.generar_secuencia_completa(n_numeros)
     
     print("\nResultados Pruebas Estadísticas:")
     
     # 1. Media
-    aprobada, med, linf, lsup = prueba_media(numeros)
-    print(f"[{'✅' if aprobada else '❌'}] Media: {med:.4f} (Intervalo: [{linf:.4f}, {lsup:.4f}])")
+    aprobada_media, med, linf, lsup = prueba_media(numeros)
+    print(f"[{'OK' if aprobada_media else 'ERROR'}] Media: {med:.4f} (Intervalo: [{linf:.4f}, {lsup:.4f}])")
     
     # 2. Varianza
-    aprobada, var, chi2_obs, chi2_inf, chi2_sup = prueba_varianza(numeros)
-    print(f"[{'✅' if aprobada else '❌'}] Varianza: {var:.4f} (Chi2 Obs: {chi2_obs:.2f} en [{chi2_inf:.2f}, {chi2_sup:.2f}])")
+    aprobada_var, var, chi2_obs_var, chi2_inf_var, chi2_sup_var = prueba_varianza(numeros)
+    print(f"[{'OK' if aprobada_var else 'ERROR'}] Varianza: {var:.4f} (Chi2 Obs: {chi2_obs_var:.2f} en [{chi2_inf_var:.2f}, {chi2_sup_var:.2f}])")
     
     # 3. Chi Cuadrado
-    aprobada, chi2_obs_c, chi2_critico = prueba_chi_cuadrado(numeros)
-    print(f"[{'✅' if aprobada else '❌'}] Chi-Cuadrado: Obs = {chi2_obs_c:.2f}, Crítico = {chi2_critico:.2f}")
+    k = 10
+    aprobada_chi, chi2_obs_chi, chi2_critico_chi = prueba_chi_cuadrado(numeros, k=k)
+    print(f"[{'OK' if aprobada_chi else 'ERROR'}] Chi-Cuadrado: Obs = {chi2_obs_chi:.2f}, Crítico = {chi2_critico_chi:.2f}")
     
     # 4. Corridas
-    aprobada, z, z_critico = prueba_corridas(numeros)
-    print(f"[{'✅' if aprobada else '❌'}] Corridas: Z = {z:.4f}, Z_Crítico = {z_critico:.4f}")
+    aprobada_corridas, z_corridas, z_critico_corridas = prueba_corridas(numeros)
+    print(f"[{'OK' if aprobada_corridas else 'ERROR'}] Corridas: Z = {z_corridas:.4f}, Z_Crítico = {z_critico_corridas:.4f}")
     
-    # Exportar
-    with open(nombre_archivo, 'w', newline='', encoding='utf-8') as file:
+    # Exportar CSV (para el simulador)
+    with open(nombre_archivo_csv, 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(["indice", "numero_pseudoaleatorio"])
         for i, numero in enumerate(numeros):
             writer.writerow([i+1, numero])
-    print(f"✅ Exportado a: {nombre_archivo}")
+    print(f"Exportado a CSV: {nombre_archivo_csv}")
     
+    # Generar desglose de intervalos Chi-Cuadrado
+    intervalos = np.linspace(0, 1, k+1)
+    observadas = np.histogram(numeros, bins=intervalos)[0]
+    esperadas = np.full(k, n_numeros/k)
+    
+    # Exportar Excel (con pandas y openpyxl)
+    try:
+        df_nums = pd.DataFrame(detalles)
+        
+        pruebas_resumen = [
+            {
+                "Prueba": "Media",
+                "Métrica / Parámetro": "Media Muestral",
+                "Valor Obtenido": med,
+                "Criterio / Rango de Aceptación": f"[{linf:.4f} , {lsup:.4f}]",
+                "Resultado": "Aprobada" if aprobada_media else "Rechazada"
+            },
+            {
+                "Prueba": "Varianza",
+                "Métrica / Parámetro": "Varianza Muestral",
+                "Valor Obtenido": var,
+                "Criterio / Rango de Aceptación": f"Chi2 Obs ({chi2_obs_var:.2f}) en [{chi2_inf_var:.2f} , {chi2_sup_var:.2f}]",
+                "Resultado": "Aprobada" if aprobada_var else "Rechazada"
+            },
+            {
+                "Prueba": "Chi-Cuadrado",
+                "Métrica / Parámetro": "Estadístico Chi2 Obs",
+                "Valor Obtenido": chi2_obs_chi,
+                "Criterio / Rango de Aceptación": f"<= Chi2 Crítico ({chi2_critico_chi:.2f})",
+                "Resultado": "Aprobada" if aprobada_chi else "Rechazada"
+            },
+            {
+                "Prueba": "Corridas",
+                "Métrica / Parámetro": "Estadístico Z",
+                "Valor Obtenido": z_corridas,
+                "Criterio / Rango de Aceptación": f"|Z| ({abs(z_corridas):.4f}) <= Z Crítico ({z_critico_corridas:.4f})",
+                "Resultado": "Aprobada" if aprobada_corridas else "Rechazada"
+            }
+        ]
+        df_pruebas = pd.DataFrame(pruebas_resumen)
+        
+        desglose_chi = []
+        for idx in range(k):
+            desglose_chi.append({
+                "Intervalo": f"[{intervalos[idx]:.1f} - {intervalos[idx+1]:.1f})",
+                "Frecuencia Observada (Oi)": observadas[idx],
+                "Frecuencia Esperada (Ei)": esperadas[idx],
+                "(Oi - Ei)^2 / Ei": (observadas[idx] - esperadas[idx])**2 / esperadas[idx]
+            })
+        df_desglose_chi = pd.DataFrame(desglose_chi)
+        
+        with pd.ExcelWriter(nombre_archivo_excel, engine='openpyxl') as writer:
+            df_nums.to_excel(writer, sheet_name="Generación de Números", index=False)
+            df_pruebas.to_excel(writer, sheet_name="Resultados de Pruebas", index=False)
+            df_desglose_chi.to_excel(writer, sheet_name="Frecuencias Chi-Cuadrado", index=False)
+            
+        print(f"Exportado a Excel: {nombre_archivo_excel}")
+    except Exception as e:
+        print(f"Error al exportar a Excel {nombre_archivo_excel}: {e}")
+        
     return numeros
 
 if __name__ == "__main__":
-    print("🎲 Generador de Números Pseudoaleatorios - Multiplicador Constante (Entrega Pet)")
+    print("Generador de Números Pseudoaleatorios - Multiplicador Constante (Entrega Pet)")
     print("=" * 70)
     
     CANTIDAD = 10000
     
     # Demanda: Semilla = 2026, Multiplicador = 5324
-    numeros_demanda = generar_y_evaluar(2026, 5324, CANTIDAD, "numeros_demanda.csv")
+    nombre_excel_demanda = "Generacion Numeros Pseudoaleatorios para Demanda salida.xlsx"
+    numeros_demanda = generar_y_evaluar(2026, 5324, CANTIDAD, "numeros_demanda.csv", nombre_excel_demanda)
     
     # Lead Time: Semilla = 1754, Multiplicador = 4813
-    numeros_lead_time = generar_y_evaluar(1754, 4813, CANTIDAD, "numeros_lead_time.csv")
+    nombre_excel_lt = "Generacion Numeros Pseudoaleatorios  llegada del proveedor salida.xlsx"
+    numeros_lead_time = generar_y_evaluar(1754, 4813, CANTIDAD, "numeros_lead_time.csv", nombre_excel_lt)
     
     print("\nProceso finalizado.")

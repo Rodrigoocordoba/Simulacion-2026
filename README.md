@@ -131,12 +131,14 @@ donde $S$ es la desviación estándar muestral y $N$ es el número de corridas (
 ---
 
 ## 📁 Estructura del Repositorio
-*   `generador_numeros_pet.py`: Generador de números pseudoaleatorios con multiplicador constante y pruebas de bondad de ajuste.
+*   `generador_numeros_pet.py`: Generador de números pseudoaleatorios con multiplicador constante y pruebas de bondad de ajuste. Ahora genera automáticamente los archivos CSV y Excel detallados.
 *   `simulador_pet.py`: Motor del simulador de inventario que evalúa las diferentes políticas y exporta los archivos de validación.
 *   `numeros_demanda.csv` / `numeros_lead_time.csv`: Archivos de números pseudoaleatorios generados.
+*   `Generacion Numeros Pseudoaleatorios para Demanda salida.xlsx`: Archivo Excel detallado paso a paso con las semillas iniciales, productos, centros y números resultantes de la demanda diaria, además del resumen de pruebas y desglose de Chi-Cuadrado.
+*   `Generacion Numeros Pseudoaleatorios  llegada del proveedor salida.xlsx`: Archivo Excel detallado para la generación del tiempo de entrega del proveedor, estructurado análogamente al de demanda.
 *   `validacion_manual_pet.csv`: Reporte diario detallado de la simulación de validación para la mejor política elegida.
 *   `numeros_usados_pet.csv`: Registro de los números pseudoaleatorios consumidos durante la corrida de validación.
-*   `Generacion Numeros Pseudoaleatorios ... .xlsx`: Libros de Excel que ilustran los cálculos y la validación manual inicial.
+*   `Generacion Numeros Pseudoaleatorios ... .xlsx`: Libros de Excel que ilustran los cálculos y la validación manual inicial (ejemplos previos).
 *   `TP- EL CLAN-borrador.docx`: Borrador escrito con la documentación y teoría del trabajo práctico.
 
 ---
@@ -144,7 +146,7 @@ donde $S$ es la desviación estándar muestral y $N$ es el número de corridas (
 ## 🚀 Instrucciones de Uso
 
 1.  **Generación y Evaluación de Números Aleatorios:**
-    Ejecutar el script del generador para actualizar los números pseudoaleatorios y visualizar el resultado de las pruebas estadísticas en consola:
+    Ejecutar el script del generador para actualizar los números pseudoaleatorios y generar automáticamente las planillas Excel detalladas de salida:
     ```bash
     python generador_numeros_pet.py
     ```
