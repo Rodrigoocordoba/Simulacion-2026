@@ -1,0 +1,90 @@
+# ===========================================
+# .gitignore para Proyecto de Simulación
+# ===========================================
+
+# Configuración del Editor
+# -------------------------
+.vscode/
+.vs/
+*.code-workspace
+
+# Archivos PDF (documentos grandes, recursos o outputs)
+# ---------------------------------------------------
+*.pdf
+!README.pdf
+
+# Archivos PowerPoint/Office
+# --------------------------
+*.pptx
+*.ppt
+*.docx
+*.doc
+*.xlsx
+*.xls
+
+# Archivos de salida de PlantUML (exports)
+# ----------------------------------------
+out/
+diagramas_exportados/
+*.png
+*.svg
+*.eps
+*.cmapx
+
+# Diagramas específicos generados/temporales
+# ------------------------------------------
+diagrama_flujo_simple.puml
+diagrama_simulacion.puml
+
+# Archivos temporales del sistema
+# -------------------------------
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+*.log
+
+# Archivos de backup
+# ------------------
+*.bak
+*.backup
+*~
+*.swp
+*.swo
+
+# Archivos de Python (si usas simulación en Python)
+# -------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Archivos de R (si usas simulación en R)
+# ---------------------------------------
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+
+# Archivos de LaTeX (si generas documentos)
+# -----------------------------------------
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.toc
+
+# Archivos específicos del proyecto
+# ---------------------------------
+resultados_simulacion/
+datos_experimentales/
+*.csv
+*.dat 
