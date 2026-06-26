@@ -3,6 +3,8 @@ import math
 from scipy import stats
 import csv
 import pandas as pd
+import openpyxl
+import copy
 
 class GeneradorMultiplicadorConstante:
     def __init__(self, semilla_inicial, multiplicador):
@@ -133,7 +135,145 @@ def prueba_corridas(numeros, alpha=0.05):
     aprobada = abs(z) <= z_critico
     return aprobada, z, z_critico
 
-def generar_y_evaluar(semilla, multiplicador, n_numeros, nombre_archivo_csv, nombre_archivo_excel):
+def copiar_estilo_celda(src_cell, dest_cell):
+    if src_cell.has_style:
+        dest_cell.font = copy.copy(src_cell.font)
+        dest_cell.fill = copy.copy(src_cell.fill)
+        dest_cell.border = copy.copy(src_cell.border)
+        dest_cell.alignment = copy.copy(src_cell.alignment)
+        dest_cell.number_format = src_cell.number_format
+
+def generar_excel_desde_plantilla(template_path, output_path, is_demanda=True):
+    try:
+        wb = openpyxl.load_workbook(template_path, data_only=False)
+        gen_sheet = wb.worksheets[0]
+        sheet_name = gen_sheet.title
+        
+        if is_demanda:
+            gen_sheet["G9"] = 5324.0
+            gen_sheet["G10"] = 2026.0
+            k_formula_template = '=IF(J{row}<=0.1287,0,IF(J{row}<=0.3926,1,IF(J{row}<=0.6631,2,IF(J{row}<=0.848,3,IF(J{row}<=0.9427,4,IF(J{row}<=0.9816,5,IF(J{row}<=0.9948,6,IF(J{row}<=0.9987,7,8))))))))'
+        else:
+            gen_sheet["G9"] = 4813.0
+            gen_sheet["G10"] = 1754.0
+            k_formula_template = '=MIN(14,INT(7+8*J{row}))'
+
+        style_cells = {}
+        for col_idx in range(1, 15): # columns A to N
+            style_cells[col_idx] = gen_sheet.cell(row=14, column=col_idx)
+
+        # Generar hasta la fila 10010 (10,000 números, del índice 0 al 9999)
+        for i in range(3, 10000):
+            row = i + 11
+            
+            cell_b = gen_sheet.cell(row=row, column=2, value=float(i))
+            copiar_estilo_celda(style_cells[2], cell_b)
+            
+            cell_c = gen_sheet.cell(row=row, column=3, value=f'="Y"&B{row}&" = (X"&B{row}&")*a ="')
+            copiar_estilo_celda(style_cells[3], cell_c)
+            
+            cell_d = gen_sheet.cell(row=row, column=4, value=f'=G{row-1}*$G$9')
+            copiar_estilo_celda(style_cells[4], cell_d)
+            
+            cell_f = gen_sheet.cell(row=row, column=6, value=f'="X"&B{row}+1&" ="')
+            copiar_estilo_celda(style_cells[6], cell_f)
+            
+            cell_g = gen_sheet.cell(row=row, column=7, value=f'=MID(TEXT(D{row}, "00000000"), 3, 4)')
+            copiar_estilo_celda(style_cells[7], cell_g)
+            
+            cell_i = gen_sheet.cell(row=row, column=9, value=f'="R"&B{row}+1&" ="')
+            copiar_estilo_celda(style_cells[9], cell_i)
+            
+            cell_j = gen_sheet.cell(row=row, column=10, value=f'=G{row}/10000')
+            copiar_estilo_celda(style_cells[10], cell_j)
+            
+            cell_k = gen_sheet.cell(row=row, column=11, value=k_formula_template.format(row=row))
+            copiar_estilo_celda(style_cells[11], cell_k)
+            
+            # Limpiar columnas de control (L, M, N)
+            for c in [12, 13, 14]:
+                gen_sheet.cell(row=row, column=c, value=None)
+
+        # Primeros 20 números pseudoaleatorios
+        for r_offset in range(10):
+            gen_sheet.cell(row=12+r_offset, column=12, value=f"=J{11+r_offset}")
+            gen_sheet.cell(row=12+r_offset, column=13, value=f"=J{21+r_offset}")
+
+        # Prueba de Medias (Hoja 2)
+        media_sheet = wb.worksheets[1]
+        style_b = media_sheet.cell(row=4, column=2)
+        for row in range(103, 10003):
+            cell = media_sheet.cell(row=row, column=2, value=f"='{sheet_name}'!J{row+8}")
+            copiar_estilo_celda(style_b, cell)
+            
+        media_sheet["E3"] = "=COUNT(B3:B10002)"
+        media_sheet["E4"] = "=(SUM(B3:B10002))/$E$3"
+        media_sheet["F4"] = "=AVERAGE(B3:B10002)"
+
+        # Prueba de Varianza (Hoja 3)
+        var_sheet = wb.worksheets[2]
+        style_cells_var = {
+            2: var_sheet.cell(row=4, column=2),
+            3: var_sheet.cell(row=4, column=3),
+            4: var_sheet.cell(row=4, column=4)
+        }
+        var_sheet.cell(row=103, column=4, value=None) # Limpiar sumatoria anterior
+        
+        for row in range(103, 10003):
+            cell_b = var_sheet.cell(row=row, column=2, value=f"='{sheet_name}'!J{row+8}")
+            copiar_estilo_celda(style_cells_var[2], cell_b)
+            
+            cell_c = var_sheet.cell(row=row, column=3, value=f"=B{row}-$G$4")
+            copiar_estilo_celda(style_cells_var[3], cell_c)
+            
+            cell_d = var_sheet.cell(row=row, column=4, value=f"=POWER(C{row},2)")
+            copiar_estilo_celda(style_cells_var[4], cell_d)
+
+        # Nueva sumatoria
+        var_sheet.cell(row=10003, column=4, value="=SUM(D3:D10002)")
+        copiar_estilo_celda(style_cells_var[4], var_sheet.cell(row=10003, column=4))
+        
+        var_sheet["G3"] = "=COUNT(B3:B10002)"
+        var_sheet["G8"] = "=D10003/($G$3-1)"
+        var_sheet["H8"] = "=_xlfn.VAR.S(B3:B10002)"
+
+        # Prueba Chi-Cuadrada (Hoja 4)
+        chi_sheet = wb.worksheets[3]
+        style_b_chi = chi_sheet.cell(row=5, column=2)
+        for row in range(104, 10004):
+            cell = chi_sheet.cell(row=row, column=2, value=f"='{sheet_name}'!J{row+7}")
+            copiar_estilo_celda(style_b_chi, cell)
+            
+        chi_sheet["G5"] = "=COUNT(B4:B10003)"
+        for r in range(10, 20):
+            chi_sheet[f"I{r}"] = f'=COUNTIFS($B$4:$B$10003,">=" &G{r}, $B$4:$B$10003, "<=" &H{r})'
+
+        # Pruebas Corridas (Hoja 5)
+        corr_sheet = wb.worksheets[4]
+        style_cells_corr = {
+            2: corr_sheet.cell(row=5, column=2),
+            4: corr_sheet.cell(row=5, column=4),
+            5: corr_sheet.cell(row=5, column=5)
+        }
+        for row in range(103, 10003):
+            cell_b = corr_sheet.cell(row=row, column=2, value=f"='{sheet_name}'!J{row+8}")
+            copiar_estilo_celda(style_cells_corr[2], cell_b)
+            
+            cell_d = corr_sheet.cell(row=row, column=4, value=f"=IF(B{row}<=B{row-1},0,1)")
+            copiar_estilo_celda(style_cells_corr[4], cell_d)
+            
+            cell_e = corr_sheet.cell(row=row, column=5, value=f'=IF(D{row}<>D{row-1},1,"")')
+            copiar_estilo_celda(style_cells_corr[5], cell_e)
+
+        corr_sheet["F4"] = "=SUM(E4:E10002)"
+        corr_sheet["H10"] = "=COUNT(B3:B10002)"
+
+        wb.save(output_path)
+        print(f"Exportado a Excel exacto: {output_path}")
+    except Exception as e:
+        print(f"Error al exportar a Excel desde plantilla {template_path}: {e}")
+
+def generar_y_evaluar(semilla, multiplicador, n_numeros, nombre_archivo_csv, nombre_archivo_excel, is_demanda):
     print(f"\n--- Generando {n_numeros} números para {nombre_archivo_csv} y {nombre_archivo_excel} ---")
     print(f"Semilla: {semilla}, Multiplicador: {multiplicador}")
     
@@ -144,20 +284,20 @@ def generar_y_evaluar(semilla, multiplicador, n_numeros, nombre_archivo_csv, nom
     
     # 1. Media
     aprobada_media, med, linf, lsup = prueba_media(numeros)
-    print(f"[{'OK' if aprobada_media else 'ERROR'}] Media: {med:.4f} (Intervalo: [{linf:.4f}, {lsup:.4f}])")
+    print(f"[OK if aprobada_media else ERROR] Media: {med:.4f} (Intervalo: [{linf:.4f}, {lsup:.4f}])")
     
     # 2. Varianza
     aprobada_var, var, chi2_obs_var, chi2_inf_var, chi2_sup_var = prueba_varianza(numeros)
-    print(f"[{'OK' if aprobada_var else 'ERROR'}] Varianza: {var:.4f} (Chi2 Obs: {chi2_obs_var:.2f} en [{chi2_inf_var:.2f}, {chi2_sup_var:.2f}])")
+    print(f"[OK if aprobada_var else ERROR] Varianza: {var:.4f} (Chi2 Obs: {chi2_obs_var:.2f} en [{chi2_inf_var:.2f}, {chi2_sup_var:.2f}])")
     
     # 3. Chi Cuadrado
     k = 10
     aprobada_chi, chi2_obs_chi, chi2_critico_chi = prueba_chi_cuadrado(numeros, k=k)
-    print(f"[{'OK' if aprobada_chi else 'ERROR'}] Chi-Cuadrado: Obs = {chi2_obs_chi:.2f}, Crítico = {chi2_critico_chi:.2f}")
+    print(f"[OK if aprobada_chi else ERROR] Chi-Cuadrado: Obs = {chi2_obs_chi:.2f}, Crítico = {chi2_critico_chi:.2f}")
     
     # 4. Corridas
     aprobada_corridas, z_corridas, z_critico_corridas = prueba_corridas(numeros)
-    print(f"[{'OK' if aprobada_corridas else 'ERROR'}] Corridas: Z = {z_corridas:.4f}, Z_Crítico = {z_critico_corridas:.4f}")
+    print(f"[OK if aprobada_corridas else ERROR] Corridas: Z = {z_corridas:.4f}, Z_Crítico = {z_critico_corridas:.4f}")
     
     # Exportar CSV (para el simulador)
     with open(nombre_archivo_csv, 'w', newline='', encoding='utf-8') as file:
@@ -167,65 +307,9 @@ def generar_y_evaluar(semilla, multiplicador, n_numeros, nombre_archivo_csv, nom
             writer.writerow([i+1, numero])
     print(f"Exportado a CSV: {nombre_archivo_csv}")
     
-    # Generar desglose de intervalos Chi-Cuadrado
-    intervalos = np.linspace(0, 1, k+1)
-    observadas = np.histogram(numeros, bins=intervalos)[0]
-    esperadas = np.full(k, n_numeros/k)
-    
-    # Exportar Excel (con pandas y openpyxl)
-    try:
-        df_nums = pd.DataFrame(detalles)
-        
-        pruebas_resumen = [
-            {
-                "Prueba": "Media",
-                "Métrica / Parámetro": "Media Muestral",
-                "Valor Obtenido": med,
-                "Criterio / Rango de Aceptación": f"[{linf:.4f} , {lsup:.4f}]",
-                "Resultado": "Aprobada" if aprobada_media else "Rechazada"
-            },
-            {
-                "Prueba": "Varianza",
-                "Métrica / Parámetro": "Varianza Muestral",
-                "Valor Obtenido": var,
-                "Criterio / Rango de Aceptación": f"Chi2 Obs ({chi2_obs_var:.2f}) en [{chi2_inf_var:.2f} , {chi2_sup_var:.2f}]",
-                "Resultado": "Aprobada" if aprobada_var else "Rechazada"
-            },
-            {
-                "Prueba": "Chi-Cuadrado",
-                "Métrica / Parámetro": "Estadístico Chi2 Obs",
-                "Valor Obtenido": chi2_obs_chi,
-                "Criterio / Rango de Aceptación": f"<= Chi2 Crítico ({chi2_critico_chi:.2f})",
-                "Resultado": "Aprobada" if aprobada_chi else "Rechazada"
-            },
-            {
-                "Prueba": "Corridas",
-                "Métrica / Parámetro": "Estadístico Z",
-                "Valor Obtenido": z_corridas,
-                "Criterio / Rango de Aceptación": f"|Z| ({abs(z_corridas):.4f}) <= Z Crítico ({z_critico_corridas:.4f})",
-                "Resultado": "Aprobada" if aprobada_corridas else "Rechazada"
-            }
-        ]
-        df_pruebas = pd.DataFrame(pruebas_resumen)
-        
-        desglose_chi = []
-        for idx in range(k):
-            desglose_chi.append({
-                "Intervalo": f"[{intervalos[idx]:.1f} - {intervalos[idx+1]:.1f})",
-                "Frecuencia Observada (Oi)": observadas[idx],
-                "Frecuencia Esperada (Ei)": esperadas[idx],
-                "(Oi - Ei)^2 / Ei": (observadas[idx] - esperadas[idx])**2 / esperadas[idx]
-            })
-        df_desglose_chi = pd.DataFrame(desglose_chi)
-        
-        with pd.ExcelWriter(nombre_archivo_excel, engine='openpyxl') as writer:
-            df_nums.to_excel(writer, sheet_name="Generación de Números", index=False)
-            df_pruebas.to_excel(writer, sheet_name="Resultados de Pruebas", index=False)
-            df_desglose_chi.to_excel(writer, sheet_name="Frecuencias Chi-Cuadrado", index=False)
-            
-        print(f"Exportado a Excel: {nombre_archivo_excel}")
-    except Exception as e:
-        print(f"Error al exportar a Excel {nombre_archivo_excel}: {e}")
+    # Exportar Excel usando plantilla
+    template_path = "Generacion Numeros Pseudoaleatorios para Demanda.xlsx" if is_demanda else "Generacion Numeros Pseudoaleatorios  llegada del proveedor.xlsx"
+    generar_excel_desde_plantilla(template_path, nombre_archivo_excel, is_demanda)
         
     return numeros
 
@@ -237,10 +321,10 @@ if __name__ == "__main__":
     
     # Demanda: Semilla = 2026, Multiplicador = 5324
     nombre_excel_demanda = "Generacion Numeros Pseudoaleatorios para Demanda salida.xlsx"
-    numeros_demanda = generar_y_evaluar(2026, 5324, CANTIDAD, "numeros_demanda.csv", nombre_excel_demanda)
+    numeros_demanda = generar_y_evaluar(2026, 5324, CANTIDAD, "numeros_demanda.csv", nombre_excel_demanda, is_demanda=True)
     
     # Lead Time: Semilla = 1754, Multiplicador = 4813
     nombre_excel_lt = "Generacion Numeros Pseudoaleatorios  llegada del proveedor salida.xlsx"
-    numeros_lead_time = generar_y_evaluar(1754, 4813, CANTIDAD, "numeros_lead_time.csv", nombre_excel_lt)
+    numeros_lead_time = generar_y_evaluar(1754, 4813, CANTIDAD, "numeros_lead_time.csv", nombre_excel_lt, is_demanda=False)
     
     print("\nProceso finalizado.")
