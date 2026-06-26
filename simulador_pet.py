@@ -3,6 +3,9 @@ import math
 import statistics
 import csv
 import os
+import pandas as pd
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 class SimuladorInventario:
     def __init__(self, archivo_demanda, archivo_lead_time):
@@ -159,14 +162,84 @@ class SimuladorInventario:
         
         return promedio_ctf, lim_inf, lim_sup
 
+def dar_formato_excel(filepath):
+    try:
+        wb = openpyxl.load_workbook(filepath)
+        sheet = wb.active
+        
+        # Estilos visuales premium (Azul oscuro elegante)
+        header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+        header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+        data_font = Font(name="Segoe UI", size=10)
+        align_center = Alignment(horizontal="center", vertical="center")
+        thin_side = Side(border_style="thin", color="D3D3D3")
+        border_all = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        
+        # Dar formato a la cabecera
+        for col in range(1, sheet.max_column + 1):
+            cell = sheet.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = align_center
+            cell.border = border_all
+            
+        # Dar formato a los datos de la tabla
+        for row in range(2, sheet.max_row + 1):
+            for col in range(1, sheet.max_column + 1):
+                cell = sheet.cell(row=row, column=col)
+                cell.font = data_font
+                cell.alignment = align_center
+                cell.border = border_all
+                
+                # Detectar columnas con dinero acumulado y aplicar formato moneda en pesos sin centavos
+                header_name = sheet.cell(row=1, column=col).value
+                if header_name and "Acumulado" in header_name:
+                    cell.number_format = "$#,##0"
+                elif header_name and header_name in ["Dia", "Stock_Inicial", "Demanda", "Stock_Final", "Ventas_Perdidas", "Lead_Time"]:
+                    cell.number_format = "#,##0"
+                    
+        # Autoajuste de ancho de columnas
+        for col in sheet.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = openpyxl.utils.get_column_letter(col[0].column)
+            sheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
+            
+        wb.save(filepath)
+    except Exception as e:
+        print(f"Error al dar formato al Excel {filepath}: {e}")
+
 def exportar_resumen_validacion(resumen, archivo_csv="validacion_manual_pet.csv", archivo_num="numeros_usados_pet.csv"):
-    # Exportar datos diarios
+    # Exportar datos diarios a CSV
     if resumen["Datos_Validacion"]:
         keys = resumen["Datos_Validacion"][0].keys()
         with open(archivo_csv, 'w', newline='', encoding='utf-8') as file:
             writer = csv.DictWriter(file, fieldnames=keys)
             writer.writeheader()
             writer.writerows(resumen["Datos_Validacion"])
+        print(f"Exportado a CSV: {archivo_csv}")
+            
+        # Exportar a Excel en dos archivos separados
+        try:
+            df = pd.DataFrame(resumen["Datos_Validacion"])
+            
+            # 1. Excel de Demanda Diaria
+            cols_demanda = ["Dia", "Stock_Inicial", "Llega_Pedido", "Demanda", "Stock_Final", "Ventas_Perdidas", "CTALM_Acumulado", "CVTAP_Acumulado", "CTF_Acumulado"]
+            df_demanda = df[cols_demanda]
+            excel_demanda = "Demanda diaria salida.xlsx"
+            df_demanda.to_excel(excel_demanda, index=False)
+            dar_formato_excel(excel_demanda)
+            print(f"Exportado a Excel de Demanda: {excel_demanda}")
+            
+            # 2. Excel de Tiempo de Espera del Proveedor (Lead Time)
+            cols_proveedor = ["Dia", "Stock_Inicial", "Stock_Final", "Emite_Pedido", "Lead_Time", "Llega_Pedido", "CTEP_Acumulado", "CTF_Acumulado"]
+            df_proveedor = df[cols_proveedor]
+            excel_proveedor = "Tiempo de espera del proveedor salida.xlsx"
+            df_proveedor.to_excel(excel_proveedor, index=False)
+            dar_formato_excel(excel_proveedor)
+            print(f"Exportado a Excel de Proveedor: {excel_proveedor}")
+            
+        except Exception as e:
+            print(f"Error al generar los Excels de simulación: {e}")
             
     # Exportar números usados
     with open(archivo_num, 'w', newline='', encoding='utf-8') as file:
@@ -178,7 +251,7 @@ def exportar_resumen_validacion(resumen, archivo_csv="validacion_manual_pet.csv"
             writer.writerow(["Lead_Time", n])
 
 if __name__ == "__main__":
-    print("🚚 Simulador de Inventario - Entrega Pet")
+    print("Simulador de Inventario - Entrega Pet")
     print("=" * 75)
     
     simulador = SimuladorInventario("numeros_demanda.csv", "numeros_lead_time.csv")
@@ -200,11 +273,11 @@ if __name__ == "__main__":
             mejor_politica = (rop, tp)
             
     print("=" * 75)
-    print(f"🎯 LA MEJOR POLÍTICA ES: ROP = {mejor_politica[0]}, Tamaño Pedido = {mejor_politica[1]}")
+    print(f"LA MEJOR POLÍTICA ES: ROP = {mejor_politica[0]}, Tamaño Pedido = {mejor_politica[1]}")
     print(f"   Costo Promedio (CTF): ${mejor_ctf:,.2f}")
     
     print("\n" + "=" * 75)
-    print("📊 GENERANDO RESUMEN DE VALIDACIÓN PARA LA MEJOR POLÍTICA (1 CORRIDA DE 180 DÍAS)")
+    print("GENERANDO RESUMEN DE VALIDACIÓN PARA LA MEJOR POLÍTICA (1 CORRIDA DE 180 DÍAS)")
     print("=" * 75)
     
     resumen = simulador.simular_politica(mejor_politica[0], mejor_politica[1], TF=180, validacion_manual=True)
@@ -230,8 +303,8 @@ if __name__ == "__main__":
     print(f"- Costo de Venta Perdida: ${resumen['CVTAP']:,.2f}")
     print(f"- Costo de Emisión de Pedidos: ${resumen['CTEP']:,.2f}")
     print(f"- COSTO TOTAL DE FUNCIONAMIENTO (CTF): ${resumen['CTF']:,.2f}")
-    print("\n✅ Datos de validación exportados a: validacion_manual_pet.csv")
+    print("\nDatos de validación exportados a: validacion_manual_pet.csv")
     print(f"   Total de registros (días): 180")
-    print("✅ Números pseudoaleatorios usados exportados a: numeros_usados_pet.csv")
+    print("Números pseudoaleatorios usados exportados a: numeros_usados_pet.csv")
     print(f"   Total de números usados: {total_numeros_usados}")
     print("=" * 75)

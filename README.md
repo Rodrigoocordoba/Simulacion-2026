@@ -132,10 +132,12 @@ donde $S$ es la desviación estándar muestral y $N$ es el número de corridas (
 
 ## 📁 Estructura del Repositorio
 *   `generador_numeros_pet.py`: Generador de números pseudoaleatorios con multiplicador constante y pruebas de bondad de ajuste. Ahora genera automáticamente los archivos CSV y Excel detallados.
-*   `simulador_pet.py`: Motor del simulador de inventario que evalúa las diferentes políticas y exporta los archivos de validación.
+*   `simulador_pet.py`: Motor del simulador de inventario que evalúa las diferentes políticas y exporta los archivos de validación. Ahora genera reportes detallados en CSV y Excel formateado.
 *   `numeros_demanda.csv` / `numeros_lead_time.csv`: Archivos de números pseudoaleatorios generados.
 *   `Generacion Numeros Pseudoaleatorios para Demanda salida.xlsx`: Archivo Excel detallado paso a paso con las semillas iniciales, productos, centros y números resultantes de la demanda diaria, además del resumen de pruebas y desglose de Chi-Cuadrado.
 *   `Generacion Numeros Pseudoaleatorios  llegada del proveedor salida.xlsx`: Archivo Excel detallado para la generación del tiempo de entrega del proveedor, estructurado análogamente al de demanda.
+*   `Demanda diaria salida.xlsx`: Archivo Excel formateado de forma premium con las columnas clave del día a día (Dia, Stock Inicial, Llega Pedido, Demanda, Stock Final, Ventas Perdidas, Costo Almacenamiento, Costo Venta Perdida y Costo Total de Funcionamiento) para la primera corrida de validación de 180 días.
+*   `Tiempo de espera del proveedor salida.xlsx`: Archivo Excel formateado con el foco en las órdenes al proveedor del día a día (Dia, Stock Inicial, Stock Final, Emite Pedido, Lead Time, Llega Pedido, Costo Emisión Pedido y Costo Total de Funcionamiento).
 *   `validacion_manual_pet.csv`: Reporte diario detallado de la simulación de validación para la mejor política elegida.
 *   `numeros_usados_pet.csv`: Registro de los números pseudoaleatorios consumidos durante la corrida de validación.
 *   `Generacion Numeros Pseudoaleatorios ... .xlsx`: Libros de Excel que ilustran los cálculos y la validación manual inicial (ejemplos previos).
@@ -152,7 +154,7 @@ donde $S$ es la desviación estándar muestral y $N$ es el número de corridas (
     ```
 
 2.  **Ejecutar el Simulador de Inventario:**
-    Correr el script del simulador para evaluar las políticas, encontrar la configuración óptima de menor costo y generar los archivos de auditoría:
+    Correr el script del simulador para evaluar las políticas, encontrar la configuración óptima de menor costo y generar automáticamente los reportes diario en CSV y en las dos planillas Excel formateadas correspondientes:
     ```bash
     python simulador_pet.py
     ```
