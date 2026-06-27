@@ -1,8 +1,8 @@
 import scipy.stats as stats
 import math
-import statistics
 import csv
 import os
+from datetime import datetime
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -11,12 +11,15 @@ class SimuladorInventario:
     def __init__(self, archivo_demanda, archivo_lead_time):
         self.numeros_demanda = self.cargar_csv(archivo_demanda)
         self.numeros_lead_time = self.cargar_csv(archivo_lead_time)
+        self.demandas_transformadas = [
+            int(valor) for valor in stats.poisson.ppf(self.numeros_demanda, 2.05)
+        ]
         self.idx_demanda = 0
         self.idx_lead_time = 0
         
         # Variables exógenas de costos
         self.CALM = 500      # Costo por guardar una bolsa
-        self.CVP = 40000     # Costo por venta perdida
+        self.CVP = 10000     # Costo por venta perdida (según el Excel de referencia)
         self.CEP = 5000      # Costo por emitir un pedido
 
     def cargar_csv(self, archivo):
@@ -30,6 +33,11 @@ class SimuladorInventario:
             print(f"Error al cargar {archivo}: {e}")
         return numeros
 
+    def reiniciar_secuencias(self):
+        """Reinicia los índices para comparar políticas con los mismos aleatorios."""
+        self.idx_demanda = 0
+        self.idx_lead_time = 0
+
     def obtener_ri_demanda(self):
         ri = self.numeros_demanda[self.idx_demanda]
         self.idx_demanda = (self.idx_demanda + 1) % len(self.numeros_demanda)
@@ -41,21 +49,23 @@ class SimuladorInventario:
         return ri
 
     def generar_demanda(self):
-        ri = self.obtener_ri_demanda()
-        # Transformada Inversa - Poisson lambda = 2.05
-        demanda = stats.poisson.ppf(ri, 2.05)
-        return int(demanda), ri
+        indice = self.idx_demanda
+        ri = self.numeros_demanda[indice]
+        demanda = self.demandas_transformadas[indice]
+        self.idx_demanda = (indice + 1) % len(self.numeros_demanda)
+        return demanda, ri
 
     def generar_lead_time(self):
         ri = self.obtener_ri_lead_time()
         # Transformada Inversa Uniforme Discreta [7, 14]
         return math.floor(7 + (8 * ri)), ri
 
-    def simular_politica(self, ROP, TP, TF=180, validacion_manual=False):
-        # CONDICIONES INICIALES SEGÚN DIAGRAMA
+    def simular_politica(self, PEP, TP, TF=180, validacion_manual=False):
+        # CONDICIONES INICIALES SEGÚN EL DIAGRAMA
         T = 0
         FLL = 1
-        ST = 40
+        ST = 0
+        PP = True
         CTALM = 0
         CVTAP = 0
         CTEP = 0
@@ -73,12 +83,17 @@ class SimuladorInventario:
         for _ in range(TF):
             T += 1
             llegada_pedido = False
+
+            # El Excel muestra el pedido que estaba pendiente al comenzar el día.
+            pedido_pendiente_inicio = PP
+            fll_inicio = FLL if PP else None
             
             # 1. ¿T = FLL? (Llegada de pedido)
-            if T == FLL:
+            if PP and T == FLL:
                 ST += TP
                 llegada_pedido = True
-                
+                PP = False
+
             # Generar Demanda
             DD, ri_dem = self.generar_demanda()
             numeros_usados_dem.append(ri_dem)
@@ -86,38 +101,59 @@ class SimuladorInventario:
             
             st_anterior = ST
             vp_dia = 0
+            costo_almacenamiento_dia = 0
+            costo_ventas_perdidas_dia = 0
             # 2. ¿ST >= DD?
             if ST >= DD:
                 ST -= DD
-                CTALM += (ST * self.CALM)
+                costo_almacenamiento_dia = ST * self.CALM
+                CTALM += costo_almacenamiento_dia
             else:
                 vp_dia = DD - ST
-                CVTAP += (vp_dia * self.CVP)
+                costo_ventas_perdidas_dia = vp_dia * self.CVP
+                CVTAP += costo_ventas_perdidas_dia
                 ST = 0
                 
             ventas_perdidas_total += vp_dia
                 
             # 3. Revisión de inventario
             emite_pedido = False
-            lt_dia = 0
-            if ST <= ROP and FLL <= T:
+            lt_dia = None
+            ri_lt = None
+            costo_emision_dia = 0
+            if ST <= PEP and not PP:
                 lt_dia, ri_lt = self.generar_lead_time()
                 numeros_usados_lt.append(ri_lt)
                 FLL = T + lt_dia
-                CTEP += self.CEP
+                costo_emision_dia = self.CEP
+                CTEP += costo_emision_dia
                 emite_pedido = True
                 pedidos_realizados += 1
+                PP = True
 
             if validacion_manual:
+                costo_total_dia = costo_emision_dia + costo_almacenamiento_dia + costo_ventas_perdidas_dia
                 datos_validacion.append({
+                    "Fila": T,
                     "Dia": T,
+                    "FLL": fll_inicio,
+                    "Ri_Lead_Time": ri_lt,
+                    "Tamaño_Pedido": TP if pedido_pendiente_inicio else None,
+                    "Ri_Demanda": ri_dem,
                     "Stock_Inicial": st_anterior,
                     "Llega_Pedido": "SI" if llegada_pedido else "NO",
                     "Demanda": DD,
+                    "Ventas": DD - vp_dia,
                     "Stock_Final": ST,
+                    "PEP": PEP,
+                    "Pedido_Pendiente": "SI" if pedido_pendiente_inicio else "NO",
                     "Ventas_Perdidas": vp_dia,
                     "Emite_Pedido": "SI" if emite_pedido else "NO",
-                    "Lead_Time": lt_dia if emite_pedido else "-",
+                    "Lead_Time": lt_dia,
+                    "Costo_Emision_Dia": costo_emision_dia,
+                    "Costo_Almacenamiento_Dia": costo_almacenamiento_dia,
+                    "Costo_Ventas_Perdidas_Dia": costo_ventas_perdidas_dia,
+                    "Costo_Total_Dia": costo_total_dia,
                     "CTALM_Acumulado": CTALM,
                     "CVTAP_Acumulado": CVTAP,
                     "CTEP_Acumulado": CTEP,
@@ -129,6 +165,11 @@ class SimuladorInventario:
         
         if validacion_manual:
             return {
+                "PEP": PEP,
+                "TP": TP,
+                "CALM": self.CALM,
+                "CVP": self.CVP,
+                "CEP": self.CEP,
                 "CTF": CTF,
                 "Demanda_Total": demanda_total,
                 "Ventas_Perdidas": ventas_perdidas_total,
@@ -142,25 +183,6 @@ class SimuladorInventario:
             }
             
         return CTF
-
-    def ejecutar_experimento(self, ROP, TP, cant_corridas=50):
-        resultados_ctf = []
-        for _ in range(cant_corridas):
-            ctf = self.simular_politica(ROP, TP)
-            resultados_ctf.append(ctf)
-            
-        promedio_ctf = statistics.mean(resultados_ctf)
-        desvio_ctf = statistics.stdev(resultados_ctf)
-        
-        # Intervalo de confianza para variables de otra distribución (Ecuación de Chebyshev / No normal)
-        r = cant_corridas
-        alfa = 0.05
-        margen_error = desvio_ctf / math.sqrt(r * alfa)
-        
-        lim_inf = promedio_ctf - margen_error
-        lim_sup = promedio_ctf + margen_error
-        
-        return promedio_ctf, lim_inf, lim_sup
 
 def dar_formato_excel(filepath):
     try:
@@ -208,11 +230,229 @@ def dar_formato_excel(filepath):
     except Exception as e:
         print(f"Error al dar formato al Excel {filepath}: {e}")
 
-def exportar_resumen_validacion(resumen, archivo_csv="validacion_manual_pet.csv", archivo_num="numeros_usados_pet.csv"):
+def crear_carpeta_corrida(carpeta_base=os.path.join("salidas", "corridas")):
+    """Crea una carpeta única para no sobrescribir ejecuciones anteriores."""
+    identificador = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    carpeta = os.path.abspath(os.path.join(carpeta_base, f"corrida_{identificador}"))
+    os.makedirs(carpeta, exist_ok=False)
+    return carpeta
+
+def exportar_simulacion_completa(
+    resumen,
+    resultados_politicas=None,
+    mejor_politica=None,
+    filepath="Simulación de inventario.xlsx",
+    mostrar_mensaje=True
+):
+    """Exporta una corrida diaria con una estructura equivalente al Excel de referencia."""
+    if not resumen["Datos_Validacion"]:
+        return
+
+    columnas = [
+        ("Fila", "FILA"),
+        ("Dia", "T (día actual)"),
+        ("FLL", "FLL (fecha de llegada del pedido)"),
+        ("Ri_Lead_Time", "Número aleatorio del tiempo de entrega"),
+        ("Lead_Time", "Tiempo de entrega del proveedor"),
+        ("Tamaño_Pedido", "Tamaño del pedido"),
+        ("Ri_Demanda", "Número aleatorio de la demanda"),
+        ("Demanda", "Demanda diaria"),
+        ("Stock_Inicial", "ST INICIAL"),
+        ("Demanda", "DEMANDA"),
+        ("Ventas", "VENTAS"),
+        ("Stock_Final", "ST FINAL"),
+        ("PEP", "PEP (punto de emisión del pedido)"),
+        ("Pedido_Pendiente", "PEDIDO PENDIENTE (PP)"),
+        ("Ventas_Perdidas", "Ventas perdidas"),
+        ("Costo_Emision_Dia", "Costo emisión pedido"),
+        ("Costo_Almacenamiento_Dia", "Costo almacenamiento"),
+        ("Costo_Ventas_Perdidas_Dia", "Costo ventas perdidas"),
+        ("Costo_Total_Dia", "Costo total"),
+    ]
+
+    filas = []
+    for registro in resumen["Datos_Validacion"]:
+        fila = {}
+        for clave, encabezado in columnas:
+            valor = registro.get(clave)
+            fila[encabezado] = None if valor == "-" else valor
+        filas.append(fila)
+
+    pd.DataFrame(filas).to_excel(filepath, index=False, sheet_name="Simulación diaria")
+
+    wb = openpyxl.load_workbook(filepath)
+    ws = wb["Simulación diaria"]
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:S{ws.max_row}"
+    ws.sheet_view.showGridLines = False
+    ws.row_dimensions[1].height = 74
+
+    encabezado_general = PatternFill("solid", fgColor="FFFFFF")
+    encabezado_pendiente = PatternFill("solid", fgColor="FFFF00")
+    encabezado_costos = PatternFill("solid", fgColor="C5E0B3")
+    relleno_aleatorio_entrega = PatternFill("solid", fgColor="D9EAD3")
+    relleno_blanco = PatternFill("solid", fgColor="FFFFFF")
+    fuente_encabezado = Font(name="Calibri", size=11, bold=False, color="000000")
+    fuente_costos = Font(name="Calibri", size=11, bold=True, color="2F5496")
+    borde = Border(
+        left=Side(style="thin", color="000000"),
+        right=Side(style="thin", color="000000"),
+        top=Side(style="thin", color="000000"),
+        bottom=Side(style="thin", color="000000"),
+    )
+
+    for celda in ws[1]:
+        celda.fill = encabezado_general
+        celda.font = fuente_encabezado
+        celda.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        celda.border = borde
+
+    ws["N1"].fill = encabezado_pendiente
+    for col in range(16, 20):
+        ws.cell(1, col).fill = encabezado_costos
+        ws.cell(1, col).font = fuente_costos
+        ws.cell(1, col).alignment = Alignment(horizontal="left", vertical="center")
+
+    for row in range(2, ws.max_row + 1):
+        ws.row_dimensions[row].height = 15
+        for col in range(1, 20):
+            celda = ws.cell(row, col)
+            celda.border = borde
+            celda.fill = relleno_blanco
+            celda.font = Font(name="Calibri", size=11, color="000000")
+            celda.alignment = Alignment(horizontal="right", vertical="center")
+
+        for col in [1, 2, 3, 5, 6, 8, 14]:
+            ws.cell(row, col).alignment = Alignment(horizontal="center", vertical="center")
+
+        for col in [4, 5, 7, 8]:
+            ws.cell(row, col).font = Font(name="Arial", size=10, color="000000")
+
+        ws.cell(row, 4).fill = relleno_aleatorio_entrega
+        for col in range(16, 20):
+            ws.cell(row, col).number_format = '#,##0'
+        ws.cell(row, 4).number_format = "0.0000"
+        ws.cell(row, 7).number_format = "0.0000"
+
+    anchos = {
+        "A": 4.71, "B": 7.00, "C": 12.14, "D": 10.14, "E": 13.43,
+        "F": 10.43, "G": 9.14, "H": 8.71, "I": 9.71, "J": 10.29,
+        "K": 7.71, "L": 8.57, "M": 16.00, "N": 10.86, "O": 8.43,
+        "P": 19.86, "Q": 21.14, "R": 20.43, "S": 10.71,
+    }
+    for columna, ancho in anchos.items():
+        ws.column_dimensions[columna].width = ancho
+
+    if resultados_politicas and mejor_politica:
+        resumen_ws = wb.create_sheet("Resumen políticas", 0)
+        resumen_ws.sheet_view.showGridLines = False
+        resumen_ws.freeze_panes = "A7"
+
+        resumen_ws.merge_cells("A1:I1")
+        resumen_ws["A1"] = "Comparación de políticas de inventario"
+        resumen_ws["A1"].fill = PatternFill("solid", fgColor="1F4E79")
+        resumen_ws["A1"].font = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
+        resumen_ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        resumen_ws.row_dimensions[1].height = 30
+
+        resumen_ws.merge_cells("A2:I2")
+        resumen_ws["A2"] = (
+            "Cada combinación PEP/TP corresponde a una única corrida de 180 días."
+        )
+        resumen_ws["A2"].alignment = Alignment(horizontal="center")
+        resumen_ws["A2"].font = Font(name="Calibri", size=10, italic=True, color="595959")
+
+        resumen_ws.merge_cells("A3:I3")
+        resumen_ws["A3"] = (
+            f"Costos vigentes: CALM ${resumen['CALM']:,}/unidad-día · "
+            f"CVP ${resumen['CVP']:,}/venta perdida · CEP ${resumen['CEP']:,}/pedido"
+        )
+        resumen_ws["A3"].alignment = Alignment(horizontal="center")
+        resumen_ws["A3"].font = Font(name="Calibri", size=10, color="595959")
+
+        mejor_resultado = min(resultados_politicas, key=lambda x: x["CTF"])
+        resumen_ws["A4"] = "Política óptima"
+        resumen_ws["B4"] = f"PEP {mejor_politica[0]} / TP {mejor_politica[1]}"
+        resumen_ws["D4"] = "CTF mínimo"
+        resumen_ws["E4"] = mejor_resultado["CTF"]
+        resumen_ws["G4"] = "Corridas realizadas"
+        resumen_ws["H4"] = len(resultados_politicas)
+
+        for celda in ["A4", "D4", "G4"]:
+            resumen_ws[celda].fill = PatternFill("solid", fgColor="D9EAF7")
+            resumen_ws[celda].font = Font(bold=True, color="1F1F1F")
+            resumen_ws[celda].alignment = Alignment(horizontal="center")
+        for celda in ["B4", "E4", "H4"]:
+            resumen_ws[celda].fill = PatternFill("solid", fgColor="E2F0D9")
+            resumen_ws[celda].font = Font(bold=True, color="006100")
+            resumen_ws[celda].alignment = Alignment(horizontal="center")
+        resumen_ws["E4"].number_format = '$#,##0'
+
+        encabezados = [
+            "Ranking", "PEP", "TP", "Costo almacenamiento",
+            "Costo ventas perdidas", "Costo pedidos", "CTF",
+            "Nivel de servicio", "Conclusión"
+        ]
+        for col, encabezado in enumerate(encabezados, start=1):
+            celda = resumen_ws.cell(6, col, encabezado)
+            celda.fill = PatternFill("solid", fgColor="C6E0B4")
+            celda.font = Font(bold=True, color="2F5496")
+            celda.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            celda.border = borde
+
+        resultados_ordenados = sorted(resultados_politicas, key=lambda x: x["CTF"])
+        for ranking, resultado in enumerate(resultados_ordenados, start=1):
+            fila = ranking + 6
+            es_optima = (resultado["PEP"], resultado["TP"]) == mejor_politica
+            es_primera = (resultado["PEP"], resultado["TP"]) == (5, 20)
+            conclusion = "ÓPTIMA" if es_optima else ("Primera alternativa" if es_primera else "")
+            valores = [
+                ranking, resultado["PEP"], resultado["TP"], resultado["CTALM"],
+                resultado["CVTAP"], resultado["CTEP"], resultado["CTF"],
+                resultado["Nivel_Servicio"], conclusion
+            ]
+            for col, valor in enumerate(valores, start=1):
+                celda = resumen_ws.cell(fila, col, valor)
+                celda.border = borde
+                celda.alignment = Alignment(horizontal="center", vertical="center")
+                if col in [4, 5, 6, 7]:
+                    celda.number_format = '$#,##0'
+                elif col == 8:
+                    celda.number_format = '0.0%'
+                if es_optima:
+                    celda.fill = PatternFill("solid", fgColor="C6EFCE")
+                    celda.font = Font(bold=True, color="006100")
+                elif es_primera:
+                    celda.fill = PatternFill("solid", fgColor="D9EAF7")
+
+        ultima_fila = 6 + len(resultados_ordenados)
+        resumen_ws.auto_filter.ref = f"A6:I{ultima_fila}"
+        for columna, ancho in {
+            "A": 19, "B": 15, "C": 10, "D": 21, "E": 22,
+            "F": 17, "G": 17, "H": 18, "I": 22
+        }.items():
+            resumen_ws.column_dimensions[columna].width = ancho
+
+        wb.active = 0
+
+    wb.save(filepath)
+    if mostrar_mensaje:
+        print(f"Exportado a Excel de simulación completa: {filepath}")
+
+def exportar_resumen_validacion(
+    resumen,
+    resultados_politicas=None,
+    mejor_politica=None,
+    carpeta_salida="."
+):
+    archivo_csv = os.path.join(carpeta_salida, "Validación manual.csv")
+    archivo_num = os.path.join(carpeta_salida, "Números utilizados.csv")
+
     # Exportar datos diarios a CSV
     if resumen["Datos_Validacion"]:
         keys = resumen["Datos_Validacion"][0].keys()
-        with open(archivo_csv, 'w', newline='', encoding='utf-8') as file:
+        # UTF-8 con BOM mantiene correctamente tildes y la letra eñe en Excel.
+        with open(archivo_csv, 'w', newline='', encoding='utf-8-sig') as file:
             writer = csv.DictWriter(file, fieldnames=keys)
             writer.writeheader()
             writer.writerows(resumen["Datos_Validacion"])
@@ -225,7 +465,7 @@ def exportar_resumen_validacion(resumen, archivo_csv="validacion_manual_pet.csv"
             # 1. Excel de Demanda Diaria
             cols_demanda = ["Dia", "Stock_Inicial", "Llega_Pedido", "Demanda", "Stock_Final", "Ventas_Perdidas", "CTALM_Acumulado", "CVTAP_Acumulado", "CTF_Acumulado"]
             df_demanda = df[cols_demanda]
-            excel_demanda = "Demanda diaria salida.xlsx"
+            excel_demanda = os.path.join(carpeta_salida, "Demanda diaria.xlsx")
             df_demanda.to_excel(excel_demanda, index=False)
             dar_formato_excel(excel_demanda)
             print(f"Exportado a Excel de Demanda: {excel_demanda}")
@@ -233,16 +473,25 @@ def exportar_resumen_validacion(resumen, archivo_csv="validacion_manual_pet.csv"
             # 2. Excel de Tiempo de Espera del Proveedor (Lead Time)
             cols_proveedor = ["Dia", "Stock_Inicial", "Stock_Final", "Emite_Pedido", "Lead_Time", "Llega_Pedido", "CTEP_Acumulado", "CTF_Acumulado"]
             df_proveedor = df[cols_proveedor]
-            excel_proveedor = "Tiempo de espera del proveedor salida.xlsx"
+            excel_proveedor = os.path.join(carpeta_salida, "Tiempo de entrega del proveedor.xlsx")
             df_proveedor.to_excel(excel_proveedor, index=False)
             dar_formato_excel(excel_proveedor)
             print(f"Exportado a Excel de Proveedor: {excel_proveedor}")
+
+            # 3. Excel completo, equivalente a la planilla diaria de referencia
+            excel_completo = os.path.join(carpeta_salida, "Simulación de inventario.xlsx")
+            exportar_simulacion_completa(
+                resumen,
+                resultados_politicas,
+                mejor_politica,
+                filepath=excel_completo
+            )
             
         except Exception as e:
             print(f"Error al generar los Excels de simulación: {e}")
             
     # Exportar números usados
-    with open(archivo_num, 'w', newline='', encoding='utf-8') as file:
+    with open(archivo_num, 'w', newline='', encoding='utf-8-sig') as file:
         writer = csv.writer(file)
         writer.writerow(["Tipo", "Numero_Pseudoaleatorio"])
         for n in resumen["Numeros_Usados_Dem"]:
@@ -256,32 +505,100 @@ if __name__ == "__main__":
     
     simulador = SimuladorInventario("numeros_demanda.csv", "numeros_lead_time.csv")
     
-    politicas = [(10, 30), (15, 30), (20, 40), (25, 50), (30, 50), (20, 60), (15, 50)]
+    # La primera alternativa es la definida en el Excel. Se explora una grilla
+    # de políticas para encontrar el menor costo entre las opciones evaluadas.
+    valores_pep = list(range(5, 11))
+    valores_tp = list(range(15, 26))
+    politicas = [(5, 20)]
+    politicas.extend(
+        (pep, tp)
+        for pep in valores_pep
+        for tp in valores_tp
+        if (pep, tp) != (5, 20)
+    )
     
     mejor_ctf = float('inf')
     mejor_politica = None
-    
-    print(f"{'ROP':<5} | {'TP':<5} | {'CTF Promedio ($)':<18} | {'IC 95% Inferior':<18} | {'IC 95% Superior':<18}")
-    print("-" * 75)
-    
-    for rop, tp in politicas:
-        ctf_prom, lim_inf, lim_sup = simulador.ejecutar_experimento(rop, tp, cant_corridas=50)
-        print(f"{rop:<5} | {tp:<5} | ${ctf_prom:<17,.2f} | ${lim_inf:<17,.2f} | ${lim_sup:<17,.2f}")
-        
-        if ctf_prom < mejor_ctf:
-            mejor_ctf = ctf_prom
-            mejor_politica = (rop, tp)
-            
+    mejor_resumen = None
+    resultados_politicas = []
+
+    carpeta_salida = crear_carpeta_corrida()
+    carpeta_corridas = os.path.join(carpeta_salida, "Corridas por combinación")
+    os.makedirs(carpeta_corridas, exist_ok=True)
+
+    print(f"Generando {len(politicas)} corridas de 180 días y sus Excel individuales...")
+
+    for numero_corrida, (pep, tp) in enumerate(politicas, start=1):
+        simulador.reiniciar_secuencias()
+        resumen_politica = simulador.simular_politica(
+            pep,
+            tp,
+            TF=180,
+            validacion_manual=True
+        )
+
+        demanda_total = resumen_politica["Demanda_Total"]
+        ventas_perdidas = resumen_politica["Ventas_Perdidas"]
+        nivel_servicio_politica = (
+            (demanda_total - ventas_perdidas) / demanda_total
+            if demanda_total > 0 else 0
+        )
+
+        resultados_politicas.append({
+            "PEP": pep,
+            "TP": tp,
+            "CTALM": resumen_politica["CTALM"],
+            "CVTAP": resumen_politica["CVTAP"],
+            "CTEP": resumen_politica["CTEP"],
+            "CTF": resumen_politica["CTF"],
+            "Nivel_Servicio": nivel_servicio_politica,
+            "Ventas_Perdidas": ventas_perdidas,
+            "Pedidos": resumen_politica["Pedidos_Realizados"],
+        })
+
+        archivo_corrida = os.path.join(
+            carpeta_corridas,
+            f"Corrida_PEP_{pep:02d}_TP_{tp:02d}.xlsx"
+        )
+        exportar_simulacion_completa(
+            resumen_politica,
+            filepath=archivo_corrida,
+            mostrar_mensaje=False
+        )
+
+        if resumen_politica["CTF"] < mejor_ctf:
+            mejor_ctf = resumen_politica["CTF"]
+            mejor_politica = (pep, tp)
+            mejor_resumen = resumen_politica
+
+        if numero_corrida % 50 == 0 or numero_corrida == len(politicas):
+            print(f"  Completadas: {numero_corrida}/{len(politicas)}")
+
+    print("\n10 MEJORES POLÍTICAS")
+    print(f"{'PEP':<5} | {'TP':<5} | {'CTF ($)':<18} | {'Nivel servicio':<16}")
+    print("-" * 55)
+    for resultado in sorted(resultados_politicas, key=lambda x: x["CTF"])[:10]:
+        print(
+            f"{resultado['PEP']:<5} | {resultado['TP']:<5} | "
+            f"${resultado['CTF']:<17,.2f} | "
+            f"{resultado['Nivel_Servicio'] * 100:<15.2f}%"
+        )
+
     print("=" * 75)
-    print(f"LA MEJOR POLÍTICA ES: ROP = {mejor_politica[0]}, Tamaño Pedido = {mejor_politica[1]}")
-    print(f"   Costo Promedio (CTF): ${mejor_ctf:,.2f}")
+    print(f"LA MEJOR POLÍTICA ES: PEP = {mejor_politica[0]}, Tamaño Pedido = {mejor_politica[1]}")
+    print(f"   Costo de la corrida (CTF): ${mejor_ctf:,.2f}")
     
     print("\n" + "=" * 75)
     print("GENERANDO RESUMEN DE VALIDACIÓN PARA LA MEJOR POLÍTICA (1 CORRIDA DE 180 DÍAS)")
     print("=" * 75)
     
-    resumen = simulador.simular_politica(mejor_politica[0], mejor_politica[1], TF=180, validacion_manual=True)
-    exportar_resumen_validacion(resumen)
+    resumen = mejor_resumen
+    exportar_resumen_validacion(
+        resumen,
+        resultados_politicas,
+        mejor_politica,
+        carpeta_salida=carpeta_salida
+    )
     
     total_numeros_usados = len(resumen['Numeros_Usados_Dem']) + len(resumen['Numeros_Usados_LT'])
     
@@ -291,7 +608,7 @@ if __name__ == "__main__":
         nivel_servicio = (ventas_concretadas / resumen['Demanda_Total']) * 100
     
     print("RESUMEN DE LA SIMULACIÓN:")
-    print(f"- Política Evaluada: ROP = {mejor_politica[0]}, TP = {mejor_politica[1]}")
+    print(f"- Política Evaluada: PEP = {mejor_politica[0]}, TP = {mejor_politica[1]}")
     print(f"- Días Simulados: 180")
     print(f"- Demanda Total: {resumen['Demanda_Total']} bolsas")
     print(f"- Ventas Perdidas: {resumen['Ventas_Perdidas']} bolsas")
@@ -303,8 +620,10 @@ if __name__ == "__main__":
     print(f"- Costo de Venta Perdida: ${resumen['CVTAP']:,.2f}")
     print(f"- Costo de Emisión de Pedidos: ${resumen['CTEP']:,.2f}")
     print(f"- COSTO TOTAL DE FUNCIONAMIENTO (CTF): ${resumen['CTF']:,.2f}")
-    print("\nDatos de validación exportados a: validacion_manual_pet.csv")
+    print(f"\nArchivos de esta corrida guardados en: {carpeta_salida}")
+    print(f"Excel individuales por combinación: {carpeta_corridas}")
+    print("Datos de validación exportados a: Validación manual.csv")
     print(f"   Total de registros (días): 180")
-    print("Números pseudoaleatorios usados exportados a: numeros_usados_pet.csv")
+    print("Números pseudoaleatorios usados exportados a: Números utilizados.csv")
     print(f"   Total de números usados: {total_numeros_usados}")
     print("=" * 75)

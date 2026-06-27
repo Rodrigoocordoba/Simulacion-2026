@@ -1,7 +1,7 @@
 # 🚚 Simulador de Inventario - Entrega Pet 🐶🐱
 Este repositorio contiene el desarrollo del Trabajo Práctico de Simulación para la optimización del sistema de inventario de la sucursal Resistencia de **Entrega Pet**, enfocado en el producto estrella de temporada alta: **Vital Can Premium Perro Adulto 20 kg**.
 
-El objetivo principal es encontrar la combinación óptima de **Punto de Emisión de Pedido (PR o ROP)** y **Tamaño de Pedido (TP)** que minimice el **Costo Total de Funcionamiento (CTF)** del sistema, garantizando al mismo tiempo un excelente nivel de servicio para los clientes.
+El objetivo principal es comparar múltiples combinaciones de **Punto de Emisión de Pedido (PEP)** y **Tamaño de Pedido (TP)** para encontrar la de menor **Costo Total de Funcionamiento (CTF)**. La primera alternativa es la indicada en la planilla de referencia: `(PEP = 5, TP = 20)`.
 
 ---
 
@@ -19,9 +19,9 @@ El objetivo principal es encontrar la combinación óptima de **Punto de Emisió
 *   **Objetivo Principal:** Minimizar el Costo Total de Funcionamiento (CTF) del sistema de inventario para bolsas de 20 kg de Vital Can Premium Perro Adulto.
 *   **Objetivos Específicos:**
     *   Modelar el comportamiento de la demanda diaria y los tiempos de entrega del proveedor mediante variables aleatorias.
-    *   Evaluar múltiples políticas de control de inventario `(ROP, TP)`.
-    *   Determinar la política óptima que logre el mejor balance entre costos de almacenamiento, emisión de pedidos y ventas perdidas (costos de oportunidad).
-    *   Obtener intervalos de confianza robustos utilizando la desigualdad de Chebyshev para la toma de decisiones.
+    *   Evaluar distintas políticas de control de inventario, comenzando por `(PEP = 5, TP = 20)`.
+    *   Encontrar el mejor balance entre costos de almacenamiento, emisión de pedidos y ventas perdidas (costos de oportunidad).
+    *   Comparar el costo total obtenido en una corrida de 180 días para cada combinación PEP/TP.
 
 ---
 
@@ -29,14 +29,15 @@ El objetivo principal es encontrar la combinación óptima de **Punto de Emisió
 
 ### Variables Exógenas (Parámetros y Costos)
 *   **Costo de Almacenamiento ($CALM$):** $\$500$ por bolsa al día (aplicado sobre el stock remanente al final del día).
-*   **Costo por Venta Perdida ($CVP$):** $\$40,000$ por bolsa no entregada por falta de stock.
+*   **Costo por Venta Perdida ($CVP$):** $\$10,000$ por bolsa no entregada por falta de stock, según el ejemplo del Excel (5 ventas perdidas = $50.000).
 *   **Costo por Emisión de Pedido ($CEP$):** $\$5,000$ por cada orden de compra enviada al proveedor.
 *   **Demanda Diaria ($DD$):** Variable aleatoria con distribución de **Poisson** ($\lambda = 2.05$ bolsas/día).
 *   **Lead Time ($LT$):** Variable aleatoria con distribución **Uniforme Discreta** $[7, 14]$ días.
 
 ### Variables de Control (Alternativas de Decisión)
-*   **Punto de Emisión de Pedido ($PR$ o $ROP$):** Nivel de stock a partir del cual se dispara una orden de reposición.
+*   **Punto de Emisión de Pedido ($PEP$):** Nivel bajo de stock a partir del cual se dispara una orden de reposición.
 *   **Tamaño del Pedido ($TP$):** Cantidad de bolsas que se solicitan en cada orden.
+*   **Grilla evaluada:** $PEP \in \{5,6,\ldots,10\}$ y todos los tamaños enteros $TP \in \{15,16,\ldots,25\}$, para un total de 66 alternativas. La grilla se puede ampliar desde `simulador_pet.py`.
 
 ### Variables Endógenas (De Estado y Salida)
 *   **$T$:** Reloj de simulación en días.
@@ -79,7 +80,8 @@ El simulador funciona bajo el método de **Incremento de Tiempo Constante** ($\D
                                │
                 ┌──────────────┴──────────────┐
                 │    Condiciones Iniciales    │
-                │ ST = 40, FLL = 1, T = 0     │
+                │ ST = 0, FLL = 1, PP = True  │
+                │ T = 0                        │
                 │ Costos Acumulados = 0       │
                 └──────────────┬──────────────┘
                                │
@@ -87,6 +89,7 @@ El simulador funciona bajo el método de **Incremento de Tiempo Constante** ($\D
                    │           │
                    │     ¿T == FLL? (Llega Pedido)
                    │         ├─── [ SÍ ] ───> ST = ST + TP
+                   │         │                PP = False
                    │         └─── [ NO ] ───┐
                    │                        │
                    │       ┌────────────────┘
@@ -103,10 +106,11 @@ El simulador funciona bajo el método de **Incremento de Tiempo Constante** ($\D
                    │                          ST = 0
                    │       ┌────────────────┘
                    │       │
-                   │     ¿ST <= ROP y no hay pedidos pendientes (FLL <= T)?
-                   │         ├─── [ SÍ ] ───> Generar Lead Time (LT) (Uniforme [7, 14])
+                   │     ¿ST <= PEP y PP = False?
+                   │         ├─── [ SÍ ] ───> Generar Lead Time uniforme [7, 14]
                    │         │                FLL = T + LT
                    │         │                CTEP += CEP
+                   │         │                PP = True
                    │         └─── [ NO ] ───┐
                    │                        │
                    │       ┌────────────────┘
@@ -122,24 +126,24 @@ El simulador funciona bajo el método de **Incremento de Tiempo Constante** ($\D
                          [ Fin ]
 ```
 
-### Simulación de Políticas y Análisis Estadístico
-Para cada política de inventario `(ROP, TP)`, se ejecutan **$50$ corridas independientes** de $180$ días.
-Dado que la distribución del costo total final ($CTF$) no es necesariamente normal, se calcula el intervalo de confianza del 95% ($\alpha = 0.05$) aplicando la **Desigualdad de Chebyshev**:
-$$\text{Intervalo} = \text{Media} \pm \frac{S}{\sqrt{N \cdot \alpha}}$$
-donde $S$ es la desviación estándar muestral y $N$ es el número de corridas ($50$).
+### Simulación de Políticas
+Para cada una de las 66 combinaciones `(PEP, TP)` se ejecuta **una corrida de 180 días**. Todas comienzan desde las mismas condiciones y secuencias pseudoaleatorias para que la comparación dependa de la política evaluada. Cada corrida se exporta a su propio Excel dentro de `Corridas por combinación`.
 
 ---
 
 ## 📁 Estructura del Repositorio
 *   `generador_numeros_pet.py`: Generador de números pseudoaleatorios con multiplicador constante y pruebas de bondad de ajuste. Ahora genera automáticamente los archivos CSV y Excel detallados.
-*   `simulador_pet.py`: Motor del simulador de inventario que evalúa las diferentes políticas y exporta los archivos de validación. Ahora genera reportes detallados en CSV y Excel formateado.
+*   `simulador_pet.py`: Motor que compara múltiples políticas y exporta la validación de la alternativa óptima.
+*   `salidas/corridas/corrida_FECHA_HORA/`: Carpeta única creada en cada ejecución para conservar el historial sin sobrescribir resultados anteriores.
+*   `Corridas por combinación/`: Contiene 66 Excel individuales, uno por cada par `(PEP, TP)`, con sus 180 días completos.
+*   `Simulación de inventario.xlsx`: Incluye el ranking de políticas y la corrida completa de 180 días para la mejor alternativa, con las mismas 19 columnas y convenciones de la planilla de referencia.
 *   `numeros_demanda.csv` / `numeros_lead_time.csv`: Archivos de números pseudoaleatorios generados.
 *   `Generacion Numeros Pseudoaleatorios para Demanda salida.xlsx`: Archivo Excel detallado paso a paso con las semillas iniciales, productos, centros y números resultantes de la demanda diaria, además del resumen de pruebas y desglose de Chi-Cuadrado.
 *   `Generacion Numeros Pseudoaleatorios  llegada del proveedor salida.xlsx`: Archivo Excel detallado para la generación del tiempo de entrega del proveedor, estructurado análogamente al de demanda.
-*   `Demanda diaria salida.xlsx`: Archivo Excel formateado de forma premium con las columnas clave del día a día (Dia, Stock Inicial, Llega Pedido, Demanda, Stock Final, Ventas Perdidas, Costo Almacenamiento, Costo Venta Perdida y Costo Total de Funcionamiento) para la primera corrida de validación de 180 días.
-*   `Tiempo de espera del proveedor salida.xlsx`: Archivo Excel formateado con el foco en las órdenes al proveedor del día a día (Dia, Stock Inicial, Stock Final, Emite Pedido, Lead Time, Llega Pedido, Costo Emisión Pedido y Costo Total de Funcionamiento).
-*   `validacion_manual_pet.csv`: Reporte diario detallado de la simulación de validación para la mejor política elegida.
-*   `numeros_usados_pet.csv`: Registro de los números pseudoaleatorios consumidos durante la corrida de validación.
+*   `Demanda diaria.xlsx`: Detalle diario de demanda, stock y costos.
+*   `Tiempo de entrega del proveedor.xlsx`: Detalle de pedidos y tiempos de entrega.
+*   `Validación manual.csv`: Reporte diario en UTF-8 compatible con Excel en Windows.
+*   `Números utilizados.csv`: Registro de los números pseudoaleatorios consumidos durante la corrida.
 *   `Generacion Numeros Pseudoaleatorios ... .xlsx`: Libros de Excel que ilustran los cálculos y la validación manual inicial (ejemplos previos).
 *   `TP- EL CLAN-borrador.docx`: Borrador escrito con la documentación y teoría del trabajo práctico.
 
@@ -154,7 +158,7 @@ donde $S$ es la desviación estándar muestral y $N$ es el número de corridas (
     ```
 
 2.  **Ejecutar el Simulador de Inventario:**
-    Correr el script del simulador para evaluar las políticas, encontrar la configuración óptima de menor costo y generar automáticamente los reportes diario en CSV y en las dos planillas Excel formateadas correspondientes:
+    Correr el script del simulador para comparar las políticas, identificar la de menor costo y generar automáticamente el ranking y la corrida diaria de la mejor alternativa:
     ```bash
     python simulador_pet.py
     ```
