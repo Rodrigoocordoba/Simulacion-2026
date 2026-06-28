@@ -79,7 +79,7 @@ summary.showGridLines = false;
 titleBand(summary, "A1:M1", "Entrega Pet - Comparación estadística de políticas PEP/TP");
 summary.getRange("A2:M2").merge();
 summary.getRange("A2").values = [[
-  `10 pares seleccionados | hasta ${payload.metadata.replicas} réplicas de ${payload.metadata.dias} días | IC 95%`,
+  `${payload.metadata.pares} pares seleccionados | ${payload.metadata.replicas} réplicas de ${payload.metadata.dias} días | IC 95%`,
 ]];
 summary.getRange("A2:M2").format = {
   fill: COLORS.blue,
@@ -144,11 +144,11 @@ summaryWidths.forEach((width, index) => {
 });
 
 // ---------------------------------------------------------------------------
-// Evolución del descarte por etapas
+// Comparación final de intervalos
 // ---------------------------------------------------------------------------
-const evolution = workbook.worksheets.add("Evolución IC");
+const evolution = workbook.worksheets.add("Comparación IC");
 evolution.showGridLines = false;
-titleBand(evolution, "A1:J1", "Evolución de los intervalos de confianza por etapa");
+titleBand(evolution, "A1:J1", `Comparación de intervalos de confianza con N = ${payload.metadata.replicas}`);
 const evolutionHeaders = [
   "N", "PEP", "TP", "CTF medio", "Límite inferior", "Límite superior",
   "Mejor PEP", "Mejor TP", "Se superpone", "Estado",
@@ -182,7 +182,7 @@ evolution.freezePanes.freezeRows(3);
 });
 
 // ---------------------------------------------------------------------------
-// Resultados de las 500 réplicas
+// Resultados de todas las réplicas del experimento
 // ---------------------------------------------------------------------------
 const replicas = workbook.worksheets.add("Réplicas");
 replicas.showGridLines = false;
@@ -206,7 +206,7 @@ const replicaRows = matrix(payload.replicas, replicaKeys).map((row) => {
 const replicasLast = 3 + replicaRows.length;
 replicas.getRange(`A4:K${replicasLast}`).values = replicaRows;
 styleBody(replicas.getRange(`A4:K${replicasLast}`));
-replicas.getRange(`D4:G${replicasLast}`).format.numberFormat = '"$"#,##0';
+replicas.getRange(`D4:G${replicasLast}`).format.numberFormat = '"$"#,##0.00';
 replicas.getRange(`J4:J${replicasLast}`).format.numberFormat = "0.00%";
 replicas.getRange(`A4:C${replicasLast}`).format.horizontalAlignment = "center";
 replicas.getRange(`H4:K${replicasLast}`).format.horizontalAlignment = "center";
@@ -269,7 +269,7 @@ for (const pair of payload.pares) {
   sheet.getRange("E2:E3").format.font = { bold: true, color: COLORS.navy };
   sheet.getRange("G2:G3").format.font = { bold: true, color: COLORS.navy };
   sheet.getRange("I2:I3").format.font = { bold: true, color: COLORS.navy };
-  sheet.getRange("B3:H3").format.numberFormat = '"$"#,##0';
+  sheet.getRange("B3:H3").format.numberFormat = '"$"#,##0.00';
   sheet.getRange("J2").format.numberFormat = "0.00%";
 
   sheet.getRange("A6:T6").values = [dailyHeaders];
@@ -279,7 +279,7 @@ for (const pair of payload.pares) {
   styleBody(sheet.getRange(`A${dataStart}:T${dataEnd}`));
   sheet.getRange(`C${dataStart}:C${dataEnd}`).format.numberFormat = "0.0000";
   sheet.getRange(`F${dataStart}:F${dataEnd}`).format.numberFormat = "0.0000";
-  sheet.getRange(`P${dataStart}:T${dataEnd}`).format.numberFormat = '"$"#,##0';
+  sheet.getRange(`P${dataStart}:T${dataEnd}`).format.numberFormat = '"$"#,##0.00';
   sheet.getRange(`A${dataStart}:B${dataEnd}`).format.horizontalAlignment = "center";
   sheet.getRange(`D${dataStart}:O${dataEnd}`).format.horizontalAlignment = "center";
   sheet.getRange(`H${dataStart}:H${dataEnd}`).conditionalFormats.add("containsText", {
@@ -301,7 +301,7 @@ for (const pair of payload.pares) {
 
 if (previewDir) {
   await fs.mkdir(previewDir, { recursive: true });
-  const sheetNames = ["Resumen IC", "Evolución IC", "Réplicas", ...payload.pares.map(
+  const sheetNames = ["Resumen IC", "Comparación IC", "Réplicas", ...payload.pares.map(
     (pair) => `PEP${String(pair.pep).padStart(2, "0")}_TP${String(pair.tp).padStart(2, "0")}`,
   )];
   for (const sheetName of sheetNames) {

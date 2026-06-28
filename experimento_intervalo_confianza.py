@@ -9,6 +9,7 @@ import ctypes
 import math
 import os
 import sys
+import warnings
 from statistics import mean, stdev
 from time import perf_counter
 
@@ -17,30 +18,39 @@ from scipy import stats
 from simulador_pet import SimuladorInventario
 
 
-REPLICAS = 50
-ETAPAS_REPLICAS = (10, 20, 30, 40, 50)
+REPLICAS = 30
+ETAPAS_REPLICAS = (30,)
 DIAS_POR_REPLICA = 180
 CONFIANZA = 0.95
 CARPETA_SALIDA = os.path.join("salidas", "intervalo_confianza")
 ANCHO_TERMINAL = 78
 
-# Selección espacial reducida: cuatro esquinas, dos puntos medios de los
-# extremos y cuatro puntos interiores. Incluye la política actual (5, 20).
-PARES_A_EVALUAR = [
-    # Esquinas del espacio PEP/TP
+# Pares históricos de rango bajo solicitados para ampliar la comparación.
+PARES_RANGO_BAJO = [
     (5, 15),
-    (5, 25),
-    (10, 15),
-    (10, 25),
-    # Puntos medios sobre los extremos de PEP
     (5, 20),
+    (5, 25),
     (10, 20),
-    # Puntos interiores alrededor del centro (PEP 7,5 / TP 20)
-    (7, 19),
-    (7, 21),
-    (8, 19),
-    (8, 21),
+    (10, 25),
+    (15, 20),
 ]
+
+# Región operativa nueva: mantiene una separación TP - PEP de al menos
+# 15 bolsas, equivalente a unos 7 días de demanda media.
+PARES_REGION_OPERATIVA = [
+    (20, 35),
+    (20, 40),
+    (20, 45),
+    (20, 50),
+    (25, 40),
+    (25, 45),
+    (25, 50),
+    (30, 45),
+    (30, 50),
+    (35, 50),
+]
+
+PARES_A_EVALUAR = PARES_RANGO_BAJO + PARES_REGION_OPERATIVA
 
 
 class Color:
@@ -119,6 +129,10 @@ def intervalo_confianza_t(valores, confianza=CONFIANZA):
     t_critico = stats.t.ppf(1.0 - alpha / 2.0, df=n - 1)
     margen = t_critico * error_estandar
 
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        shapiro_p = stats.shapiro(valores).pvalue
+
     return {
         "n": n,
         "media": promedio,
@@ -128,12 +142,28 @@ def intervalo_confianza_t(valores, confianza=CONFIANZA):
         "margen": margen,
         "limite_inferior": promedio - margen,
         "limite_superior": promedio + margen,
-        "shapiro_p": stats.shapiro(valores).pvalue,
+        "shapiro_p": shapiro_p,
     }
 
 
 def politicas_a_evaluar():
-    """Devuelve los diez pares seleccionados para la experimentación."""
+    """Devuelve los pares seleccionados y valida sus restricciones."""
+    invalidas = [(pep, tp) for pep, tp in PARES_A_EVALUAR if pep >= tp]
+    if invalidas:
+        raise ValueError(
+            "Cada política debe cumplir PEP < TP. "
+            f"Pares inválidos: {invalidas}"
+        )
+    invalidas_region = [
+        (pep, tp)
+        for pep, tp in PARES_REGION_OPERATIVA
+        if (tp - pep) < 15
+    ]
+    if invalidas_region:
+        raise ValueError(
+            "Los pares de la región operativa deben cumplir TP - PEP >= 15. "
+            f"Pares inválidos: {invalidas_region}"
+        )
     return list(PARES_A_EVALUAR)
 
 
@@ -285,16 +315,17 @@ def alternativas_solapadas(resumenes, optima):
     ]
 
 
-def analizar_etapas(replicas_por_politica):
-    """Aplica eliminación sucesiva: solo descarta intervalos claramente peores."""
+def analizar_intervalos(replicas_por_politica, mostrar_operacion=True):
+    """Compara una vez los intervalos al completar las 30 corridas."""
     activas = list(PARES_A_EVALUAR)
     historial = []
 
-    subtitulo("ANÁLISIS PROGRESIVO DE SUPERPOSICIÓN", "🔎")
-    print(
-        "  Regla: si un IC se superpone con el mejor, continúa. "
-        "Si queda totalmente por encima, se descarta."
-    )
+    if mostrar_operacion:
+        subtitulo(f"COMPARACIÓN FINAL DE INTERVALOS CON N = {REPLICAS}", "🔎")
+        print(
+            "  Regla: si un IC se superpone con el mejor, continúa. "
+            "Si queda totalmente por encima, se descarta."
+        )
 
     for n in ETAPAS_REPLICAS:
         resumenes = sorted(
@@ -330,46 +361,40 @@ def analizar_etapas(replicas_por_politica):
                 "Estado": estado,
             })
 
-        print()
-        print(
-            colorear(
-                f"  N = {n}: menor media PEP {mejor['PEP']} / TP {mejor['TP']} "
-                f"= {moneda(mejor['CTF_media'])}",
-                Color.NEGRITA + Color.CIAN,
-            )
-        )
-        print(
-            "       IC 95%: "
-            f"[{moneda(mejor['CTF_limite_inferior'])}; "
-            f"{moneda(mejor['CTF_limite_superior'])}]"
-        )
-        print(
-            f"       Continúan por superposición: {len(continúan)} "
-            f"| Descartadas: {len(descartadas)}"
-        )
-        if descartadas:
+        if mostrar_operacion:
+            print()
             print(
-                "       Pares descartados: "
-                + ", ".join(f"({p}, {t})" for p, t in descartadas)
+                colorear(
+                    f"  N = {n}: menor media PEP {mejor['PEP']} / TP {mejor['TP']} "
+                    f"= {moneda(mejor['CTF_media'])}",
+                    Color.NEGRITA + Color.CIAN,
+                )
             )
+            print(
+                "       IC 95%: "
+                f"[{moneda(mejor['CTF_limite_inferior'])}; "
+                f"{moneda(mejor['CTF_limite_superior'])}]"
+            )
+            print(
+                f"       Continúan por superposición: {len(continúan)} "
+                f"| Descartadas: {len(descartadas)}"
+            )
+            if descartadas:
+                print(
+                    "       Pares descartados: "
+                    + ", ".join(f"({p}, {t})" for p, t in descartadas)
+                )
 
         activas = continúan
         if len(activas) == 1:
-            print(
-                colorear(
-                    f"       ✅ Los intervalos ya permiten seleccionar {activas[0]}.",
-                    Color.VERDE,
+            if mostrar_operacion:
+                print(
+                    colorear(
+                        f"       ✅ Los intervalos ya permiten seleccionar {activas[0]}.",
+                        Color.VERDE,
+                    )
                 )
-            )
             break
-        if n < ETAPAS_REPLICAS[-1]:
-            print(
-                colorear(
-                    f"       ⚠️  Hay superposición: se aumenta N a la siguiente etapa.",
-                    Color.AMARILLO,
-                )
-            )
-
     return activas, historial
 
 
@@ -385,14 +410,15 @@ def imprimir_recomendacion(optima, inicial, solapadas):
     )
 
     titulo(
-        "CONCLUSIÓN CON 50 CORRIDAS"
+        f"CONCLUSIÓN CON {REPLICAS} CORRIDAS"
         if solapadas
         else "RECOMENDACIÓN FINAL",
         "🎯",
     )
+    descripcion = "corresponde provisionalmente" if solapadas else "corresponde"
     print(
         colorear(
-            f"El menor CTF medio corresponde provisionalmente a PEP = "
+            f"El menor CTF medio {descripcion} a PEP = "
             f"{optima['PEP']} y TP = {optima['TP']}.",
             Color.NEGRITA + (Color.AMARILLO if solapadas else Color.VERDE),
         )
@@ -424,7 +450,7 @@ def imprimir_recomendacion(optima, inicial, solapadas):
         print()
         print(
             colorear(
-                "Con 50 corridas no puede afirmarse cuál de esos pares minimiza "
+                f"Con {REPLICAS} corridas no puede afirmarse cuál de esos pares minimiza "
                 "definitivamente el costo. Según el criterio del profesor, el siguiente "
                 "paso es aumentar N solamente para estas alternativas.",
                 Color.AMARILLO,
@@ -441,7 +467,11 @@ def imprimir_recomendacion(optima, inicial, solapadas):
         )
 
 
-def main():
+def main(mostrar_operacion=True):
+    for flujo in (sys.stdout, sys.stderr):
+        if hasattr(flujo, "reconfigure"):
+            flujo.reconfigure(encoding="utf-8", errors="replace")
+
     configurar_terminal()
     inicio = perf_counter()
     simulador = SimuladorInventario(
@@ -461,37 +491,42 @@ def main():
         f"de {DIAS_POR_REPLICA} días"
     )
     print("  Nivel de confianza: 95% - distribución t de Student")
+    print(
+        f"  Costos: almacenamiento {moneda(simulador.CALM)}/bolsa-día | "
+        f"venta perdida {moneda(simulador.CVP)}/bolsa | "
+        f"emisión {moneda(simulador.CEP)}/bolsa pedida"
+    )
     print()
-    print(
-        colorear(
-            f"✅ Cargados {len(simulador.numeros_demanda):,} números "
-            "pseudoaleatorios para demanda",
-            Color.VERDE,
+    if mostrar_operacion:
+        print(
+            colorear(
+                f"✅ Cargados {len(simulador.numeros_demanda):,} números "
+                "pseudoaleatorios para demanda",
+                Color.VERDE,
+            )
         )
-    )
-    print(
-        colorear(
-            f"✅ Cargados {len(simulador.numeros_lead_time):,} números "
-            "pseudoaleatorios para lead time",
-            Color.VERDE,
+        print(
+            colorear(
+                f"✅ Cargados {len(simulador.numeros_lead_time):,} números "
+                "pseudoaleatorios para lead time",
+                Color.VERDE,
+            )
         )
-    )
-
-    subtitulo(
-        f"EJECUTANDO {REPLICAS} RÉPLICAS PARA {len(politicas)} POLÍTICAS...",
-        "🔄",
-    )
-    print(
-        "  Cada política utiliza los mismos escenarios de demanda para permitir "
-        "una comparación homogénea."
-    )
+        subtitulo(
+            f"EJECUTANDO {REPLICAS} RÉPLICAS PARA {len(politicas)} POLÍTICAS...",
+            "🔄",
+        )
+        print(
+            "  Cada política utiliza los mismos escenarios de demanda para permitir "
+            "una comparación homogénea."
+        )
 
     for indice, (pep, tp) in enumerate(politicas, start=1):
         replicas = ejecutar_replicas(simulador, pep, tp)
         resumenes.append(resumir_politica(replicas))
         replicas_por_politica[(pep, tp)] = replicas
         todas_las_replicas.extend(replicas)
-        if indice % 10 == 0 or indice == len(politicas):
+        if mostrar_operacion and (indice % 10 == 0 or indice == len(politicas)):
             progreso = barra_progreso(indice, len(politicas))
             print(
                 colorear(
@@ -500,16 +535,23 @@ def main():
                 )
             )
 
-    activas, historial_etapas = analizar_etapas(replicas_por_politica)
+    # La política vigente (5, 20) funciona también como base para informar
+    # ahorro y mejora. Si no fuera candidata, se simularía por separado.
+    if (5, 20) in replicas_por_politica:
+        inicial = resumir_politica(replicas_por_politica[(5, 20)])
+    else:
+        inicial = resumir_politica(ejecutar_replicas(simulador, 5, 20))
+
+    activas, historial_etapas = analizar_intervalos(
+        replicas_por_politica,
+        mostrar_operacion=mostrar_operacion,
+    )
 
     resumenes.sort(key=lambda fila: fila["CTF_media"])
     resumenes_activas = [
         fila for fila in resumenes if (fila["PEP"], fila["TP"]) in activas
     ]
     optima = min(resumenes_activas, key=lambda fila: fila["CTF_media"])
-    inicial = next(
-        fila for fila in resumenes if fila["PEP"] == 5 and fila["TP"] == 20
-    )
     solapadas = alternativas_solapadas(resumenes_activas, optima)
     replicas_optima = replicas_por_politica[(optima["PEP"], optima["TP"])]
 
@@ -542,16 +584,17 @@ def main():
     )
     imprimir_recomendacion(optima, inicial, solapadas)
 
-    duracion = perf_counter() - inicio
-    print()
-    print(
-        colorear(
-            f"💾 Resultados exportados en: {CARPETA_SALIDA}",
-            Color.VERDE,
+    if mostrar_operacion:
+        duracion = perf_counter() - inicio
+        print()
+        print(
+            colorear(
+                f"💾 Resultados exportados en: {CARPETA_SALIDA}",
+                Color.VERDE,
+            )
         )
-    )
-    print(colorear(f"⏱️  Tiempo total: {duracion:.2f} segundos", Color.GRIS))
-    print(colorear("=" * ANCHO_TERMINAL, Color.AZUL))
+        print(colorear(f"⏱️  Tiempo total: {duracion:.2f} segundos", Color.GRIS))
+        print(colorear("=" * ANCHO_TERMINAL, Color.AZUL))
 
 
 if __name__ == "__main__":

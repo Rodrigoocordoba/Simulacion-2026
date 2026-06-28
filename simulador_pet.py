@@ -23,9 +23,11 @@ class SimuladorInventario:
         self.idx_lead_time = 0
         
         # Variables exógenas de costos
-        self.CALM = 500      # Costo por guardar una bolsa
-        self.CVP = 10000     # Costo por venta perdida (según el Excel de referencia)
-        self.CEP = 5000      # Costo por emitir un pedido
+        # $2.500.000 / (300 bolsas * 30 días) = $277,78 por bolsa/día
+        self.CALM = round(2_500_000 / (300 * 30), 2)
+        self.CVP = 10430     # $52.150 - $41.720 por cada venta perdida
+        # $2.000.000 / (24.000 kg / 20 kg por bolsa) = $1.666,67 por bolsa
+        self.CEP = round(2_000_000 / (24_000 / 20), 2)
 
     def cargar_csv(self, archivo):
         numeros = []
@@ -130,7 +132,7 @@ class SimuladorInventario:
                 lt_dia, ri_lt = self.generar_lead_time()
                 numeros_usados_lt.append(ri_lt)
                 FLL = T + lt_dia
-                costo_emision_dia = self.CEP
+                costo_emision_dia = self.CEP * TP
                 CTEP += costo_emision_dia
                 emite_pedido = True
                 pedidos_realizados += 1
@@ -370,7 +372,8 @@ def exportar_simulacion_completa(
         resumen_ws.merge_cells("A3:I3")
         resumen_ws["A3"] = (
             f"Costos vigentes: CALM ${resumen['CALM']:,}/unidad-día · "
-            f"CVP ${resumen['CVP']:,}/venta perdida · CEP ${resumen['CEP']:,}/pedido"
+            f"CVP ${resumen['CVP']:,}/venta perdida · "
+            f"CEP ${resumen['CEP']:,}/bolsa pedida"
         )
         resumen_ws["A3"].alignment = Alignment(horizontal="center")
         resumen_ws["A3"].font = Font(name="Calibri", size=10, color="595959")
@@ -532,7 +535,11 @@ def _encontrar_node_bundled():
 
 def _generar_libro_unico(payload, carpeta_salida):
     archivo_json = os.path.join(carpeta_salida, "datos_libro_simulacion.json")
-    archivo_excel = os.path.join(carpeta_salida, "Simulacion_Entrega_Pet_10_pares.xlsx")
+    cantidad_pares = payload["metadata"]["pares"]
+    archivo_excel = os.path.join(
+        carpeta_salida,
+        f"Simulacion_Entrega_Pet_{cantidad_pares}_pares.xlsx",
+    )
     builder = os.path.join(os.path.dirname(__file__), "generar_libro_simulacion.mjs")
 
     with open(archivo_json, "w", encoding="utf-8") as archivo:
@@ -544,11 +551,17 @@ def _generar_libro_unico(payload, carpeta_salida):
         comando.append(preview_dir)
 
     try:
-        subprocess.run(
+        resultado = subprocess.run(
             comando,
             cwd=os.path.dirname(__file__),
-            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
+        if resultado.returncode != 0:
+            detalle = resultado.stderr.strip() or resultado.stdout.strip()
+            raise RuntimeError(f"No se pudo generar el libro Excel: {detalle}")
     finally:
         if os.path.exists(archivo_json):
             os.remove(archivo_json)
@@ -573,7 +586,7 @@ def ejecutar_simulacion_consolidada():
 
     # La función imprime toda la información estadística en terminal y genera
     # los CSV intermedios utilizados por el libro consolidado.
-    experimento.main()
+    experimento.main(mostrar_operacion=False)
 
     carpeta_ic = experimento.CARPETA_SALIDA
     resumenes = _dataframe_a_registros(
@@ -596,9 +609,6 @@ def ejecutar_simulacion_consolidada():
 
     simulador = SimuladorInventario("numeros_demanda.csv", "numeros_lead_time.csv")
     pares_detallados = []
-    print("\n" + "=" * 78)
-    print("📘 GENERANDO UN ÚNICO LIBRO CON UNA HOJA POR PAR")
-    print("=" * 78)
     for indice, (pep, tp) in enumerate(experimento.PARES_A_EVALUAR, start=1):
         simulador.reiniciar_secuencias()
         detalle = simulador.simular_politica(
@@ -621,7 +631,6 @@ def ejecutar_simulacion_consolidada():
             },
             "dias": detalle["Datos_Validacion"],
         })
-        print(f"  ✅ Hoja preparada {indice:>2}/10: PEP {pep} / TP {tp}")
 
     carpeta_salida = crear_carpeta_corrida()
     payload = {
@@ -638,13 +647,6 @@ def ejecutar_simulacion_consolidada():
     }
     archivo_excel = _generar_libro_unico(payload, carpeta_salida)
 
-    print("\n" + "=" * 78)
-    print("✅ LIBRO CONSOLIDADO GENERADO")
-    print("=" * 78)
-    print(f"Archivo: {archivo_excel}")
-    print("Hojas: Resumen IC, Evolución IC, Réplicas y 10 hojas PEP/TP.")
-    print("No se generaron Excel individuales por combinación.")
-    print("=" * 78)
     return archivo_excel
 
 

@@ -22,23 +22,23 @@ El objetivo principal es comparar múltiples combinaciones de **Punto de Emisió
     *   Modelar el comportamiento de la demanda diaria y los tiempos de entrega del proveedor mediante variables aleatorias.
     *   Evaluar distintas políticas de control de inventario, comenzando por `(PEP = 5, TP = 20)`.
     *   Encontrar el mejor balance entre costos de almacenamiento, emisión de pedidos y ventas perdidas (costos de oportunidad).
-    *   Comparar estadísticamente el costo total mediante 50 corridas de 180 días para cada combinación PEP/TP seleccionada.
+    *   Comparar estadísticamente el costo total mediante 30 corridas de 180 días para cada combinación PEP/TP seleccionada.
 
 ---
 
 ## 🏗️ Definición del Sistema y Variables
 
 ### Variables Exógenas (Parámetros y Costos)
-*   **Costo de Almacenamiento ($CALM$):** $\$500$ por bolsa al día (aplicado sobre el stock remanente al final del día).
-*   **Costo por Venta Perdida ($CVP$):** $\$10,000$ por bolsa no entregada por falta de stock, según el ejemplo del Excel (5 ventas perdidas = $50.000).
-*   **Costo por Emisión de Pedido ($CEP$):** $\$5,000$ por cada orden de compra enviada al proveedor.
+*   **Costo de Almacenamiento ($CALM$):** $\$277,78$ por bolsa al día, calculado como $\$2.500.000/(300\times30)$ y aplicado sobre el stock remanente al final del día.
+*   **Costo por Venta Perdida ($CVP$):** $\$10.430$ por bolsa no entregada, calculado como precio de venta menos costo del producto: $\$52.150-\$41.720$.
+*   **Costo por Emisión de Pedido ($CEP$):** $\$1.666,67$ por cada bolsa incluida en la orden, calculado como $\$2.000.000/(24.000\text{ kg}/20\text{ kg})$. El costo de cada emisión es, por lo tanto, $TP\times\$1.666,67$.
 *   **Demanda Diaria ($DD$):** Variable aleatoria con distribución de **Poisson** ($\lambda = 2.05$ bolsas/día).
 *   **Lead Time ($LT$):** Variable aleatoria con distribución **Uniforme Discreta** $[7, 14]$ días.
 
 ### Variables de Control (Alternativas de Decisión)
 *   **Punto de Emisión de Pedido ($PEP$):** Nivel bajo de stock a partir del cual se dispara una orden de reposición.
 *   **Tamaño del Pedido ($TP$):** Cantidad de bolsas que se solicitan en cada orden.
-*   **Pares evaluados:** 10 combinaciones elegidas para cubrir extremos, puntos medios e interiores: `(5,15)`, `(5,25)`, `(10,15)`, `(10,25)`, `(5,20)`, `(10,20)`, `(7,19)`, `(7,21)`, `(8,19)` y `(8,21)`.
+*   **Pares evaluados:** 16 combinaciones. Se agregan los seis pares de rango bajo `(5,15)`, `(5,20)`, `(5,25)`, `(10,20)`, `(10,25)` y `(15,20)` a los diez pares de la región operativa: `(20,35)`, `(20,40)`, `(20,45)`, `(20,50)`, `(25,40)`, `(25,45)`, `(25,50)`, `(30,45)`, `(30,50)` y `(35,50)`. Todos cumplen $PEP<TP$; la región operativa mantiene además $TP-PEP\geq15$.
 
 ### Variables Endógenas (De Estado y Salida)
 *   **$T$:** Reloj de simulación en días.
@@ -110,7 +110,7 @@ El simulador funciona bajo el método de **Incremento de Tiempo Constante** ($\D
                    │     ¿ST <= PEP y PP = False?
                    │         ├─── [ SÍ ] ───> Generar Lead Time uniforme [7, 14]
                    │         │                FLL = T + LT
-                   │         │                CTEP += CEP
+                   │         │                CTEP += TP * CEP
                    │         │                PP = True
                    │         └─── [ NO ] ───┐
                    │                        │
@@ -128,15 +128,15 @@ El simulador funciona bajo el método de **Incremento de Tiempo Constante** ($\D
 ```
 
 ### Simulación de Políticas
-Para cada uno de los 10 pares `(PEP, TP)` se ejecutan **50 corridas de 180 días**. Todas las políticas reciben los mismos escenarios pseudoaleatorios para que la comparación dependa de la decisión evaluada. `simulador_pet.py` muestra en la terminal el análisis completo y crea un único libro Excel con las hojas `Resumen IC`, `Evolución IC`, `Réplicas` y una hoja diaria por cada par.
+Para cada uno de los 16 pares `(PEP, TP)` se ejecutan **30 corridas de 180 días**. Todas las políticas reciben los mismos escenarios pseudoaleatorios para que la comparación dependa de la decisión evaluada. El IC del 95% se calcula una sola vez al completar las 30 corridas. `simulador_pet.py` muestra el análisis en la terminal y crea un único libro Excel con las hojas `Resumen IC`, `Comparación IC`, `Réplicas` y una hoja diaria por cada par.
 
 ---
 
 ## 📊 Experimentación e intervalo de confianza del 95%
 
-El archivo `experimento_intervalo_confianza.py` complementa la comparación inicial con un análisis estadístico de las variables de salida. El experimento reducido evalúa **10 pares PEP/TP** y genera hasta **50 réplicas de 180 días por cada par**, para un máximo de 500 simulaciones. La selección cubre los extremos y el centro del espacio de decisión: las cuatro esquinas `(5,15)`, `(5,25)`, `(10,15)` y `(10,25)`; los puntos medios `(5,20)` y `(10,20)`; y cuatro puntos interiores `(7,19)`, `(7,21)`, `(8,19)` y `(8,21)`.
+El archivo `experimento_intervalo_confianza.py` complementa la comparación inicial con un análisis estadístico de las variables de salida. El experimento evalúa **16 pares PEP/TP** y genera **30 réplicas de 180 días por cada par**, para un total de 480 simulaciones. Todos los candidatos cumplen $PEP<TP$. Los diez pares de la región operativa mantienen además $TP-PEP\geq15$, mientras que los seis pares de rango bajo se conservan para compararlos con la política vigente `(5,20)`.
 
-La comparación se realiza progresivamente con $N \in \{10,20,30,40,50\}$. En cada etapa se identifica el menor CTF medio. Los pares cuyo IC del 95% se superpone con el mejor permanecen en evaluación y pasan a la siguiente etapa; solamente se descartan aquellos cuyo intervalo queda completamente por encima del intervalo del mejor costo.
+La comparación se realiza una sola vez con $N=30$. Se identifica el menor CTF medio y se comparan todos los intervalos del 95%. Los pares cuyo intervalo se superpone con el mejor continúan como candidatos; aquellos cuyo intervalo queda completamente por encima se descartan por mayor costo.
 
 Las réplicas de una política consumen bloques no superpuestos de los números pseudoaleatorios y, al comenzar la siguiente política, las secuencias se reinician para aplicar los mismos escenarios (números aleatorios comunes) a todas las alternativas.
 
@@ -144,18 +144,18 @@ Para cada variable se estima un intervalo bilateral para la media mediante la di
 
 $$IC_{95\%}=\bar{x}\pm t_{0.975;\,r-1}\frac{s}{\sqrt{r}}$$
 
-donde $r$ es la cantidad de réplicas acumuladas en la etapa analizada, $\bar{x}$ es la media muestral y $s$ es la desviación estándar muestral. La variable principal de decisión es el **Costo Total de Funcionamiento (CTF)**; también se informan intervalos para el nivel de servicio, las ventas perdidas, los pedidos y cada componente del costo.
+donde $r=30$ es la cantidad de réplicas utilizada en la comparación final, $\bar{x}$ es la media muestral y $s$ es la desviación estándar muestral. La variable principal de decisión es el **Costo Total de Funcionamiento (CTF)**; también se informan intervalos para el nivel de servicio, las ventas perdidas, los pedidos y cada componente del costo.
 
-Con las secuencias actualmente guardadas en el repositorio, la política con menor CTF medio observado es `(PEP = 10, TP = 25)`. En 50 réplicas se obtuvo un CTF medio de **$2.021.600**, con IC 95% **[$1.988.087,78; $2.055.112,22]**, y un nivel de servicio medio de **69,67%**, con IC 95% **[68,68%; 70,65%]**. Su intervalo todavía se superpone con el de `(PEP = 10, TP = 20)`, por lo que ambos permanecen como candidatos y el resultado es **provisional**. Para una selección definitiva deben generarse más de 50 corridas para esos dos pares.
+Con los costos actualizados y los 16 pares, la política recomendada es `(PEP = 20, TP = 35)`. En 30 réplicas obtuvo un CTF medio de **$1.800.704,54**, con IC 95% **[$1.767.560,12; $1.833.848,96]**, y un nivel de servicio medio de **91,86%**, con IC 95% **[90,68%; 93,04%]**. En la única comparación realizada con $N=30$, su intervalo no se superpone con los restantes. La recomendación es definitiva dentro de los 16 pares evaluados, aunque no demuestra un óptimo global fuera de este conjunto.
 
 ---
 
 ## 📁 Estructura del Repositorio
 *   `generador_numeros_pet.py`: Generador de números pseudoaleatorios con multiplicador constante y pruebas de bondad de ajuste. Ahora genera automáticamente los archivos CSV y Excel detallados.
 *   `simulador_pet.py`: Ejecuta la experimentación completa, presenta los intervalos y descartes en la terminal y genera un único libro consolidado.
-*   `experimento_intervalo_confianza.py`: Ejecuta hasta 50 réplicas para cada uno de los 10 pares seleccionados, calcula los IC del 95% y aplica descarte progresivo por superposición.
-*   `salidas/intervalo_confianza/`: Contiene los CSV intermedios con el resumen, la evolución por etapa y las 500 réplicas.
-*   `salidas/corridas/corrida_FECHA_HORA/Simulacion_Entrega_Pet_10_pares.xlsx`: Único Excel de cada ejecución, con 13 hojas y el detalle diario de los 10 pares.
+*   `experimento_intervalo_confianza.py`: Ejecuta 30 réplicas para cada uno de los 16 pares seleccionados, calcula una vez los IC del 95% y compara su superposición.
+*   `salidas/intervalo_confianza/`: Contiene los CSV intermedios con el resumen, la comparación final y las 480 réplicas.
+*   `salidas/corridas/corrida_FECHA_HORA/Simulacion_Entrega_Pet_16_pares.xlsx`: Único Excel de cada ejecución, con 19 hojas y el detalle diario de los 16 pares.
 *   `numeros_demanda.csv` / `numeros_lead_time.csv`: Archivos de números pseudoaleatorios generados.
 *   `Generacion Numeros Pseudoaleatorios para Demanda salida.xlsx`: Archivo Excel detallado paso a paso con las semillas iniciales, productos, centros y números resultantes de la demanda diaria, además del resumen de pruebas y desglose de Chi-Cuadrado.
 *   `Generacion Numeros Pseudoaleatorios  llegada del proveedor salida.xlsx`: Archivo Excel detallado para la generación del tiempo de entrega del proveedor, estructurado análogamente al de demanda.
@@ -177,7 +177,7 @@ Con las secuencias actualmente guardadas en el repositorio, la política con men
     ```
 
 2.  **Ejecutar el Simulador de Inventario:**
-    Correr el script para ejecutar las 50 corridas de los 10 pares, mostrar el análisis estadístico en la terminal y generar el único Excel consolidado:
+    Correr el script para ejecutar las 30 corridas de los 16 pares, mostrar el análisis estadístico en la terminal y generar el único Excel consolidado:
     ```bash
     python simulador_pet.py
     ```
