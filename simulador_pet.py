@@ -1,8 +1,13 @@
 import scipy.stats as stats
 import math
 import csv
+import json
 import os
+import shutil
+import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -499,131 +504,149 @@ def exportar_resumen_validacion(
         for n in resumen["Numeros_Usados_LT"]:
             writer.writerow(["Lead_Time", n])
 
-if __name__ == "__main__":
-    print("Simulador de Inventario - Entrega Pet")
-    print("=" * 75)
-    
-    simulador = SimuladorInventario("numeros_demanda.csv", "numeros_lead_time.csv")
-    
-    # La primera alternativa es la definida en el Excel. Se explora una grilla
-    # de políticas para encontrar el menor costo entre las opciones evaluadas.
-    valores_pep = list(range(5, 11))
-    valores_tp = list(range(15, 26))
-    politicas = [(5, 20)]
-    politicas.extend(
-        (pep, tp)
-        for pep in valores_pep
-        for tp in valores_tp
-        if (pep, tp) != (5, 20)
+def _dataframe_a_registros(filepath):
+    """Lee un CSV y devuelve tipos JSON nativos para el generador del libro."""
+    dataframe = pd.read_csv(filepath)
+    return json.loads(dataframe.to_json(orient="records", force_ascii=False))
+
+
+def _encontrar_node_bundled():
+    """Prioriza el Node del runtime de Codex y usa el del sistema como respaldo."""
+    bundled = (
+        Path.home()
+        / ".cache"
+        / "codex-runtimes"
+        / "codex-primary-runtime"
+        / "dependencies"
+        / "node"
+        / "bin"
+        / "node.exe"
     )
-    
-    mejor_ctf = float('inf')
-    mejor_politica = None
-    mejor_resumen = None
-    resultados_politicas = []
+    if bundled.exists():
+        return str(bundled)
+    node_sistema = shutil.which("node")
+    if node_sistema:
+        return node_sistema
+    raise RuntimeError("No se encontró Node.js para generar el libro Excel.")
 
-    carpeta_salida = crear_carpeta_corrida()
-    carpeta_corridas = os.path.join(carpeta_salida, "Corridas por combinación")
-    os.makedirs(carpeta_corridas, exist_ok=True)
 
-    print(f"Generando {len(politicas)} corridas de 180 días y sus Excel individuales...")
+def _generar_libro_unico(payload, carpeta_salida):
+    archivo_json = os.path.join(carpeta_salida, "datos_libro_simulacion.json")
+    archivo_excel = os.path.join(carpeta_salida, "Simulacion_Entrega_Pet_10_pares.xlsx")
+    builder = os.path.join(os.path.dirname(__file__), "generar_libro_simulacion.mjs")
 
-    for numero_corrida, (pep, tp) in enumerate(politicas, start=1):
+    with open(archivo_json, "w", encoding="utf-8") as archivo:
+        json.dump(payload, archivo, ensure_ascii=False)
+
+    comando = [_encontrar_node_bundled(), builder, archivo_json, archivo_excel]
+    preview_dir = os.environ.get("SIMULACION_PREVIEW_DIR")
+    if preview_dir:
+        comando.append(preview_dir)
+
+    try:
+        subprocess.run(
+            comando,
+            cwd=os.path.dirname(__file__),
+            check=True,
+        )
+    finally:
+        if os.path.exists(archivo_json):
+            os.remove(archivo_json)
+        # artifact-tool puede dejar un informe técnico junto al libro. No es
+        # parte de la entrega: la carpeta de la corrida debe contener un Excel.
+        informe_inspeccion = f"{archivo_excel}.inspect.ndjson"
+        if os.path.exists(informe_inspeccion):
+            os.remove(informe_inspeccion)
+
+    return archivo_excel
+
+
+def ejecutar_simulacion_consolidada():
+    """Ejecuta la experimentación y crea un solo Excel con una hoja por par."""
+    # Mantiene tildes, símbolos y emojis legibles incluso si la salida se
+    # redirige desde PowerShell (donde Python suele heredar CP-1252).
+    for flujo in (sys.stdout, sys.stderr):
+        if hasattr(flujo, "reconfigure"):
+            flujo.reconfigure(encoding="utf-8", errors="replace")
+
+    import experimento_intervalo_confianza as experimento
+
+    # La función imprime toda la información estadística en terminal y genera
+    # los CSV intermedios utilizados por el libro consolidado.
+    experimento.main()
+
+    carpeta_ic = experimento.CARPETA_SALIDA
+    resumenes = _dataframe_a_registros(
+        os.path.join(carpeta_ic, "resumen_politicas_ic95.csv")
+    )
+    evolucion = _dataframe_a_registros(
+        os.path.join(carpeta_ic, "evolucion_intervalos_por_etapa.csv")
+    )
+    replicas = _dataframe_a_registros(
+        os.path.join(carpeta_ic, "replicas_todos_los_pares.csv")
+    )
+
+    # El último estado registrado de cada par resume el descarte progresivo.
+    estado_final = {}
+    for fila in evolucion:
+        estado_final[(int(fila["PEP"]), int(fila["TP"]))] = fila["Estado"]
+    for fila in resumenes:
+        clave = (int(fila["PEP"]), int(fila["TP"]))
+        fila["Estado_Final"] = estado_final.get(clave, "DESCARTADA")
+
+    simulador = SimuladorInventario("numeros_demanda.csv", "numeros_lead_time.csv")
+    pares_detallados = []
+    print("\n" + "=" * 78)
+    print("📘 GENERANDO UN ÚNICO LIBRO CON UNA HOJA POR PAR")
+    print("=" * 78)
+    for indice, (pep, tp) in enumerate(experimento.PARES_A_EVALUAR, start=1):
         simulador.reiniciar_secuencias()
-        resumen_politica = simulador.simular_politica(
+        detalle = simulador.simular_politica(
             pep,
             tp,
-            TF=180,
-            validacion_manual=True
+            TF=experimento.DIAS_POR_REPLICA,
+            validacion_manual=True,
         )
-
-        demanda_total = resumen_politica["Demanda_Total"]
-        ventas_perdidas = resumen_politica["Ventas_Perdidas"]
-        nivel_servicio_politica = (
-            (demanda_total - ventas_perdidas) / demanda_total
-            if demanda_total > 0 else 0
-        )
-
-        resultados_politicas.append({
-            "PEP": pep,
-            "TP": tp,
-            "CTALM": resumen_politica["CTALM"],
-            "CVTAP": resumen_politica["CVTAP"],
-            "CTEP": resumen_politica["CTEP"],
-            "CTF": resumen_politica["CTF"],
-            "Nivel_Servicio": nivel_servicio_politica,
-            "Ventas_Perdidas": ventas_perdidas,
-            "Pedidos": resumen_politica["Pedidos_Realizados"],
+        pares_detallados.append({
+            "pep": pep,
+            "tp": tp,
+            "resumen": {
+                "Demanda_Total": detalle["Demanda_Total"],
+                "Ventas_Perdidas": detalle["Ventas_Perdidas"],
+                "Pedidos_Realizados": detalle["Pedidos_Realizados"],
+                "CTALM": detalle["CTALM"],
+                "CVTAP": detalle["CVTAP"],
+                "CTEP": detalle["CTEP"],
+                "CTF": detalle["CTF"],
+            },
+            "dias": detalle["Datos_Validacion"],
         })
+        print(f"  ✅ Hoja preparada {indice:>2}/10: PEP {pep} / TP {tp}")
 
-        archivo_corrida = os.path.join(
-            carpeta_corridas,
-            f"Corrida_PEP_{pep:02d}_TP_{tp:02d}.xlsx"
-        )
-        exportar_simulacion_completa(
-            resumen_politica,
-            filepath=archivo_corrida,
-            mostrar_mensaje=False
-        )
+    carpeta_salida = crear_carpeta_corrida()
+    payload = {
+        "metadata": {
+            "generado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "replicas": experimento.REPLICAS,
+            "dias": experimento.DIAS_POR_REPLICA,
+            "pares": len(experimento.PARES_A_EVALUAR),
+        },
+        "resumen": resumenes,
+        "evolucion": evolucion,
+        "replicas": replicas,
+        "pares": pares_detallados,
+    }
+    archivo_excel = _generar_libro_unico(payload, carpeta_salida)
 
-        if resumen_politica["CTF"] < mejor_ctf:
-            mejor_ctf = resumen_politica["CTF"]
-            mejor_politica = (pep, tp)
-            mejor_resumen = resumen_politica
+    print("\n" + "=" * 78)
+    print("✅ LIBRO CONSOLIDADO GENERADO")
+    print("=" * 78)
+    print(f"Archivo: {archivo_excel}")
+    print("Hojas: Resumen IC, Evolución IC, Réplicas y 10 hojas PEP/TP.")
+    print("No se generaron Excel individuales por combinación.")
+    print("=" * 78)
+    return archivo_excel
 
-        if numero_corrida % 50 == 0 or numero_corrida == len(politicas):
-            print(f"  Completadas: {numero_corrida}/{len(politicas)}")
 
-    print("\n10 MEJORES POLÍTICAS")
-    print(f"{'PEP':<5} | {'TP':<5} | {'CTF ($)':<18} | {'Nivel servicio':<16}")
-    print("-" * 55)
-    for resultado in sorted(resultados_politicas, key=lambda x: x["CTF"])[:10]:
-        print(
-            f"{resultado['PEP']:<5} | {resultado['TP']:<5} | "
-            f"${resultado['CTF']:<17,.2f} | "
-            f"{resultado['Nivel_Servicio'] * 100:<15.2f}%"
-        )
-
-    print("=" * 75)
-    print(f"LA MEJOR POLÍTICA ES: PEP = {mejor_politica[0]}, Tamaño Pedido = {mejor_politica[1]}")
-    print(f"   Costo de la corrida (CTF): ${mejor_ctf:,.2f}")
-    
-    print("\n" + "=" * 75)
-    print("GENERANDO RESUMEN DE VALIDACIÓN PARA LA MEJOR POLÍTICA (1 CORRIDA DE 180 DÍAS)")
-    print("=" * 75)
-    
-    resumen = mejor_resumen
-    exportar_resumen_validacion(
-        resumen,
-        resultados_politicas,
-        mejor_politica,
-        carpeta_salida=carpeta_salida
-    )
-    
-    total_numeros_usados = len(resumen['Numeros_Usados_Dem']) + len(resumen['Numeros_Usados_LT'])
-    
-    nivel_servicio = 0
-    if resumen['Demanda_Total'] > 0:
-        ventas_concretadas = resumen['Demanda_Total'] - resumen['Ventas_Perdidas']
-        nivel_servicio = (ventas_concretadas / resumen['Demanda_Total']) * 100
-    
-    print("RESUMEN DE LA SIMULACIÓN:")
-    print(f"- Política Evaluada: PEP = {mejor_politica[0]}, TP = {mejor_politica[1]}")
-    print(f"- Días Simulados: 180")
-    print(f"- Demanda Total: {resumen['Demanda_Total']} bolsas")
-    print(f"- Ventas Perdidas: {resumen['Ventas_Perdidas']} bolsas")
-    print(f"- Nivel de Servicio: {nivel_servicio:.2f}%")
-    print(f"- Pedidos Realizados al Proveedor: {resumen['Pedidos_Realizados']}")
-    print(f"- Números pseudoaleatorios usados (Demanda): {len(resumen['Numeros_Usados_Dem'])}")
-    print(f"- Números pseudoaleatorios usados (Lead Time): {len(resumen['Numeros_Usados_LT'])}")
-    print(f"- Costo de Almacenamiento: ${resumen['CTALM']:,.2f}")
-    print(f"- Costo de Venta Perdida: ${resumen['CVTAP']:,.2f}")
-    print(f"- Costo de Emisión de Pedidos: ${resumen['CTEP']:,.2f}")
-    print(f"- COSTO TOTAL DE FUNCIONAMIENTO (CTF): ${resumen['CTF']:,.2f}")
-    print(f"\nArchivos de esta corrida guardados en: {carpeta_salida}")
-    print(f"Excel individuales por combinación: {carpeta_corridas}")
-    print("Datos de validación exportados a: Validación manual.csv")
-    print(f"   Total de registros (días): 180")
-    print("Números pseudoaleatorios usados exportados a: Números utilizados.csv")
-    print(f"   Total de números usados: {total_numeros_usados}")
-    print("=" * 75)
+if __name__ == "__main__":
+    ejecutar_simulacion_consolidada()
