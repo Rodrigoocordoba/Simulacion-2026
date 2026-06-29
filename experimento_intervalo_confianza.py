@@ -279,23 +279,14 @@ def imprimir_resumen_politica(resumen, etiqueta, icono="📊"):
 
 
 def imprimir_ranking(resumenes, cantidad=5):
-    subtitulo(f"{cantidad} POLÍTICAS CON MENOR CTF PROMEDIO", "🏆")
-    print(
-        colorear(
-            f"  {'Pos.':<5}{'PEP':<6}{'TP':<6}{'CTF promedio':>18}"
-            f"{'IC 95% para el CTF':>35}",
-            Color.NEGRITA,
-        )
-    )
+    titulo(f"TOP {cantidad} POLÍTICAS CON MENOR CTF PROMEDIO", "🏆")
     for posicion, fila in enumerate(resumenes[:cantidad], start=1):
-        intervalo = (
-            f"[{moneda(fila['CTF_limite_inferior'], 0)}; "
-            f"{moneda(fila['CTF_limite_superior'], 0)}]"
+        etiqueta = (
+            f"PUESTO {posicion} - POLÍTICA RECOMENDADA"
+            if posicion == 1
+            else f"PUESTO {posicion}"
         )
-        print(
-            f"  {posicion:<5}{fila['PEP']:<6}{fila['TP']:<6}"
-            f"{moneda(fila['CTF_media']):>18}{intervalo:>35}"
-        )
+        imprimir_resumen_politica(fila, etiqueta, "📊")
 
 
 def intervalos_se_superponen(primera, segunda):
@@ -575,13 +566,6 @@ def main(mostrar_operacion=True):
 
     imprimir_resumen_politica(inicial, "RESULTADOS DE LA POLÍTICA INICIAL", "📋")
     imprimir_ranking(resumenes)
-    imprimir_resumen_politica(
-        optima,
-        "RESULTADOS DE LA MEJOR MEDIA OBSERVADA"
-        if solapadas
-        else "RESULTADOS DE LA POLÍTICA RECOMENDADA",
-        "📊",
-    )
     imprimir_recomendacion(optima, inicial, solapadas)
 
     if mostrar_operacion:
