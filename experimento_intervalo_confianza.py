@@ -1,7 +1,8 @@
 """Experimentacion con intervalos de confianza para el modelo Entrega Pet.
 
 Evalua cada politica PEP/TP mediante replicas independientes de 180 dias y
-estima intervalos de confianza bilaterales con distribucion t de Student.
+estima intervalos de confianza bilaterales con la formula conservadora del
+material de catedra.
 """
 
 import csv
@@ -18,10 +19,11 @@ from scipy import stats
 from simulador_pet import SimuladorInventario
 
 
-REPLICAS = 30
-ETAPAS_REPLICAS = (30,)
+REPLICAS = 50
+ETAPAS_REPLICAS = (50,)
 DIAS_POR_REPLICA = 180
 CONFIANZA = 0.95
+NIVEL_RECHAZO = 1.0 - CONFIANZA
 CARPETA_SALIDA = os.path.join("salidas", "intervalo_confianza")
 ANCHO_TERMINAL = 78
 
@@ -32,7 +34,6 @@ PARES_RANGO_BAJO = [
     (5, 25),
     (10, 20),
     (10, 25),
-    (15, 20),
 ]
 
 # Región operativa nueva: mantiene una separación TP - PEP de al menos
@@ -116,18 +117,18 @@ def barra_progreso(actual, total, ancho=28):
     return "[" + "#" * completado + "." * (ancho - completado) + "]"
 
 
-def intervalo_confianza_t(valores, confianza=CONFIANZA):
-    """Devuelve los componentes de un IC bilateral para la media."""
+def intervalo_confianza(valores, nivel_rechazo=NIVEL_RECHAZO):
+    """Devuelve un IC bilateral usando margen = s / sqrt(r * alpha)."""
     n = len(valores)
     if n < 2:
         raise ValueError("Se requieren al menos dos replicas.")
+    if nivel_rechazo <= 0:
+        raise ValueError("El nivel de rechazo debe ser mayor a cero.")
 
     promedio = mean(valores)
     desviacion = stdev(valores)
     error_estandar = desviacion / math.sqrt(n)
-    alpha = 1.0 - confianza
-    t_critico = stats.t.ppf(1.0 - alpha / 2.0, df=n - 1)
-    margen = t_critico * error_estandar
+    margen = desviacion / math.sqrt(n * nivel_rechazo)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
@@ -138,7 +139,7 @@ def intervalo_confianza_t(valores, confianza=CONFIANZA):
         "media": promedio,
         "desviacion": desviacion,
         "error_estandar": error_estandar,
-        "t_critico": t_critico,
+        "nivel_rechazo": nivel_rechazo,
         "margen": margen,
         "limite_inferior": promedio - margen,
         "limite_superior": promedio + margen,
@@ -224,9 +225,10 @@ def resumir_politica(replicas):
         "Replicas": len(replicas),
         "Dias_Por_Replica": DIAS_POR_REPLICA,
         "Confianza": CONFIANZA,
+        "Nivel_Rechazo": NIVEL_RECHAZO,
     }
     for nombre, valores in variables.items():
-        ic = intervalo_confianza_t(valores)
+        ic = intervalo_confianza(valores)
         for campo, valor in ic.items():
             if campo != "n":
                 resumen[f"{nombre}_{campo}"] = valor
@@ -307,7 +309,7 @@ def alternativas_solapadas(resumenes, optima):
 
 
 def analizar_intervalos(replicas_por_politica, mostrar_operacion=True):
-    """Compara una vez los intervalos al completar las 30 corridas."""
+    """Compara una vez los intervalos al completar las replicas definidas."""
     activas = list(PARES_A_EVALUAR)
     historial = []
 
@@ -481,7 +483,10 @@ def main(mostrar_operacion=True):
         f"  Experimento: {len(politicas)} políticas PEP/TP, {REPLICAS} réplicas "
         f"de {DIAS_POR_REPLICA} días"
     )
-    print("  Nivel de confianza: 95% - distribución t de Student")
+    print(
+        "  Nivel de confianza: 95% - fórmula conservadora "
+        f"con rechazo {numero(NIVEL_RECHAZO * 100, 0)}%"
+    )
     print(
         f"  Costos: almacenamiento {moneda(simulador.CALM)}/bolsa-día | "
         f"venta perdida {moneda(simulador.CVP)}/bolsa | "
